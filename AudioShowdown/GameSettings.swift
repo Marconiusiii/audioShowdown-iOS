@@ -25,6 +25,7 @@ final class GameSettings: ObservableObject {
     @Published var strikeSound: Int { didSet { save() } }
     @Published var themeIndex: Int { didSet { save() } }
     @Published var volume: Double { didSet { save() } }
+    @Published var reverbStyle: Int { didSet { save() } }
     @Published var haptics: HapticsLevel { didSet { save() } }
 
     init(defaults: UserDefaults = .standard) {
@@ -43,6 +44,7 @@ final class GameSettings: ObservableObject {
         strikeSound = Self.clamp(defaults.object(forKey: "strikeSound") as? Int ?? 0, 0...9)
         themeIndex = Self.clamp(defaults.object(forKey: "theme") as? Int ?? 0, 0...8)
         volume = Self.clamp(defaults.object(forKey: "volume") as? Double ?? 0.8, 0...1)
+        reverbStyle = Self.clamp(defaults.object(forKey: "reverbStyle") as? Int ?? 0, 0...3)
         haptics = HapticsLevel(rawValue: defaults.string(forKey: "haptics") ?? "") ?? .subtle
     }
 
@@ -61,6 +63,7 @@ final class GameSettings: ObservableObject {
         defaults.set(strikeSound, forKey: "strikeSound")
         defaults.set(themeIndex, forKey: "theme")
         defaults.set(volume, forKey: "volume")
+        defaults.set(reverbStyle, forKey: "reverbStyle")
         defaults.set(haptics.rawValue, forKey: "haptics")
     }
 

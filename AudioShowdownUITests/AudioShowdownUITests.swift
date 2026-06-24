@@ -43,6 +43,7 @@ final class AudioShowdownUITests: XCTestCase {
         XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "Pitch Behavior").count, 1)
         XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "Ping Rate").count, 1)
         XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "Color Theme").count, 1)
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "Reverb").count, 1)
         XCTAssertTrue(app.staticTexts["Haptics"].exists)
         XCTAssertTrue(app.staticTexts["About Audio Showdown"].exists)
         XCTAssertTrue(app.buttons["Submit Feedback"].exists)

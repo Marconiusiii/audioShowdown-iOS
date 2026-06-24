@@ -82,6 +82,7 @@ final class GameModel: ObservableObject {
         self.training = training
         phase = training ? .training : .waitingForServe
         audio.prepare(volume: settings.volume)
+        audio.setReverb(settings.reverbStyle)
     }
 
     func announceInitialState() {
@@ -94,6 +95,7 @@ final class GameModel: ObservableObject {
 
     func tick(_ date: Date) {
         audio.setVolume(settings.volume)
+        audio.setReverb(settings.reverbStyle)
         let now = date.timeIntervalSinceReferenceDate
         guard let previousTime else { self.previousTime = now; return }
         self.previousTime = now
@@ -205,8 +207,9 @@ final class GameModel: ObservableObject {
         if puck.y < puckRadius, abs(puck.x - 300) >= Self.goalHalfWidth { puck.y = puckRadius; puck.vy = abs(puck.vy) * 0.97; hitWall = true }
         if puck.y > Self.height - puckRadius, abs(puck.x - 300) >= Self.goalHalfWidth { puck.y = Self.height - puckRadius; puck.vy = -abs(puck.vy) * 0.97; hitWall = true }
         if hitWall {
-            audio.ricochet(x: puck.x / Self.width, speed: hypot(puck.vx, puck.vy))
-            haptics.play(.wall, level: settings.haptics)
+            let impactSpeed = hypot(puck.vx, puck.vy)
+            audio.ricochet(x: puck.x / Self.width, speed: impactSpeed)
+            haptics.play(.wall, level: settings.haptics, strength: impactSpeed / 1_400)
         }
     }
 
@@ -220,7 +223,11 @@ final class GameModel: ObservableObject {
         puck.vx = nx * impulse + mallet.vx * 0.65
         puck.vy = ny * impulse + mallet.vy * 0.65
         audio.strike(style: settings.strikeSound, x: puck.x / Self.width, byPlayer: isPlayer)
-        haptics.play(.strike, level: settings.haptics)
+        haptics.play(
+            isPlayer ? .playerStrike : .computerStrike,
+            level: settings.haptics,
+            strength: impulse / 1_600
+        )
     }
 
     private func detectCenterCrossing() {

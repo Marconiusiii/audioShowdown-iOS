@@ -6,10 +6,24 @@
 //
 
 import Testing
+import Foundation
 @testable import AudioShowdown
 
 @MainActor
 struct AudioShowdownTests {
+    @Test func reverbDefaultsToOffAndPersists() {
+        let suiteName = "AudioShowdownTests.Reverb.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let initialSettings = GameSettings(defaults: defaults)
+        #expect(initialSettings.reverbStyle == 0)
+        initialSettings.reverbStyle = 3
+
+        let restoredSettings = GameSettings(defaults: defaults)
+        #expect(restoredSettings.reverbStyle == 3)
+    }
+
 
     @Test func scoringAndWinningRules() {
         #expect(GameModel.pointsPerGoal(airHockeyMode: false) == 2)

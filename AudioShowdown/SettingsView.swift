@@ -12,6 +12,7 @@ struct SettingsView: View {
     private let puckSizes = ["Classic", "Big", "Gigantic"]
     private let movementSounds = ["Off", "Hum", "Tick", "Pad", "Wood", "Thud", "Brush", "Pluck", "Bell", "Square"]
     private let strikeSounds = ["Thock", "Click", "Pop", "Knock", "Snare", "Wood", "Bonk", "Zap", "Boing", "Slap"]
+    private let reverbStyles = ["Off", "Small Room", "Arcade Floor", "Showdown Tournament"]
 
     private var theme: GameTheme { GameTheme.all[settings.themeIndex] }
 
@@ -66,7 +67,7 @@ struct SettingsView: View {
                             .pickerStyle(.segmented)
                             .tint(theme.accent)
                             .onChange(of: settings.haptics) { _, level in
-                                previewHaptics.play(.strike, level: level)
+                                previewHaptics.play(.playerStrike, level: level)
                             }
                         }
                         .frame(maxWidth: .infinity, minHeight: 60)
@@ -84,6 +85,13 @@ struct SettingsView: View {
                             step: 0.05,
                             theme: theme,
                             valueChanged: { previewAudio.setVolume($0) }
+                        )
+                        AppCategoricalSliderRow(
+                            title: "Reverb",
+                            choices: reverbStyles,
+                            selection: $settings.reverbStyle,
+                            theme: theme,
+                            selectionChanged: previewReverb
                         )
 
                         AppSectionHeading(title: "Puck Audio", theme: theme)
@@ -161,6 +169,7 @@ struct SettingsView: View {
         }
         .onAppear {
             previewAudio.prepare(volume: settings.volume)
+            previewAudio.setReverb(settings.reverbStyle)
         }
     }
 
@@ -181,5 +190,10 @@ struct SettingsView: View {
 
     private func previewStrikeSound(_ index: Int) {
         previewAudio.strike(style: index, x: 0.5)
+    }
+
+    private func previewReverb(_ index: Int) {
+        previewAudio.setReverb(index)
+        previewPuckSound(settings.puckSound)
     }
 }

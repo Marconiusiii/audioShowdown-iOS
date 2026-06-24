@@ -34,6 +34,8 @@ final class GameAudioEngine {
     private var nextPuckVoice = 0
     private var nextEffectVoice = 0
     private var started = false
+    private var reverbStyle = -1
+    private var reverbBlend: Float = 0
 
     init() {
         engine.attach(environment)
@@ -44,9 +46,7 @@ final class GameAudioEngine {
         environment.distanceAttenuationParameters.referenceDistance = 0.8
         environment.distanceAttenuationParameters.maximumDistance = 30
         environment.distanceAttenuationParameters.rolloffFactor = 0.6
-        environment.reverbParameters.enable = true
-        environment.reverbParameters.loadFactoryReverbPreset(.mediumHall)
-        environment.reverbParameters.level = -18
+        environment.reverbParameters.enable = false
         puckVoices = makeVoices(count: 10)
         effectVoices = makeVoices(count: 16)
     }
@@ -71,6 +71,35 @@ final class GameAudioEngine {
 
     func setVolume(_ volume: Double) {
         engine.mainMixerNode.outputVolume = Float(volume)
+    }
+
+    func setReverb(_ style: Int) {
+        let style = min(max(style, 0), 3)
+        guard style != reverbStyle else { return }
+        reverbStyle = style
+        switch style {
+        case 1:
+            environment.reverbParameters.loadFactoryReverbPreset(.smallRoom)
+            environment.reverbParameters.level = -26
+            reverbBlend = 2.5
+            environment.reverbParameters.enable = true
+        case 2:
+            environment.reverbParameters.loadFactoryReverbPreset(.largeRoom)
+            environment.reverbParameters.level = -25
+            reverbBlend = 4
+            environment.reverbParameters.enable = true
+        case 3:
+            environment.reverbParameters.loadFactoryReverbPreset(.largeHall)
+            environment.reverbParameters.level = -24
+            reverbBlend = 6.5
+            environment.reverbParameters.enable = true
+        default:
+            reverbBlend = 0
+            environment.reverbParameters.enable = false
+        }
+        for voice in puckVoices + effectVoices {
+            voice.player.reverbBlend = reverbBlend
+        }
     }
 
     func puckPing(x: Double, distance proximity: Double, style: Int, pitchBehavior: Int, lowerWhenCloser: Bool) {
@@ -150,7 +179,7 @@ final class GameAudioEngine {
 
         let cutoff = 2_000 + 16_000 * near
         let buffer = render(tones: tones, noises: noises, gain: gain, lowPass: cutoff)
-        playPuck(buffer, x: x, proximity: near, reverbBlend: 5 + 20 * (1 - near))
+        playPuck(buffer, x: x, proximity: near)
     }
 
     func strike(style: Int, x: Double, byPlayer: Bool = true) {
@@ -189,7 +218,7 @@ final class GameAudioEngine {
             tones = [Tone(waveform: .sine, startFrequency: byPlayer ? 320 : 180, endFrequency: nil, duration: 0.06, peak: 0.21)]
             noises = [Noise(duration: 0.06, peak: 0.5, lowPass: 1_200)]
         }
-        playEffect(render(tones: tones, noises: noises, gain: baseGain), x: x, proximity: byPlayer ? 0.9 : 0.15, reverbBlend: 8)
+        playEffect(render(tones: tones, noises: noises, gain: baseGain), x: x, proximity: byPlayer ? 0.9 : 0.15)
     }
 
     func malletMovement(style: Int, x: Double) {
@@ -207,7 +236,7 @@ final class GameAudioEngine {
         case 8: tone = Tone(waveform: .sine, startFrequency: 600, endFrequency: nil, duration: 0.1, peak: 0.2); noise = nil
         default: tone = Tone(waveform: .square, startFrequency: 170, endFrequency: nil, duration: 0.05, peak: 0.18); noise = nil
         }
-        playEffect(render(tones: tone.map { [$0] } ?? [], noises: noise.map { [$0] } ?? [], gain: 0.35), x: x, proximity: 0.95, reverbBlend: 3)
+        playEffect(render(tones: tone.map { [$0] } ?? [], noises: noise.map { [$0] } ?? [], gain: 0.35), x: x, proximity: 0.95)
     }
 
     func ricochet(x: Double, speed: Double) {
@@ -221,13 +250,13 @@ final class GameAudioEngine {
             Tone(waveform: .sine, startFrequency: 2_300, endFrequency: nil, duration: 0.025, peak: 0.07)
         ]
         let noises = [Noise(duration: 0.012, peak: 0.6, highPass: 3_000 + 2_600 * velocity)]
-        playEffect(render(tones: tones, noises: noises, gain: gain), x: x, proximity: 0.5, reverbBlend: 10)
+        playEffect(render(tones: tones, noises: noises, gain: gain), x: x, proximity: 0.5)
     }
 
     func centerCrossing(volume: Double) {
         let tones = [Tone(waveform: .sine, startFrequency: 500, endFrequency: 1_900, duration: 0.30, peak: 0.12)]
         let noises = [Noise(duration: 0.33, peak: 0.42, highPass: 400, lowPass: 2_100)]
-        playEffect(render(tones: tones, noises: noises, gain: volume), x: 0.5, proximity: 0.5, reverbBlend: 18)
+        playEffect(render(tones: tones, noises: noises, gain: volume), x: 0.5, proximity: 0.5)
     }
 
     func goal(playerScored: Bool) {
@@ -235,13 +264,13 @@ final class GameAudioEngine {
             let tones = [523.0, 659, 784, 1_047].enumerated().map { index, frequency in
                 Tone(waveform: .triangle, startFrequency: frequency, endFrequency: nil, duration: 0.18, peak: 0.5, startTime: Double(index) * 0.07)
             }
-            playEffect(render(tones: tones, noises: [], gain: 0.6), x: 0.5, proximity: 0.7, reverbBlend: 16)
+            playEffect(render(tones: tones, noises: [], gain: 0.6), x: 0.5, proximity: 0.7)
         } else {
             let tones = [
                 Tone(waveform: .sawtooth, startFrequency: 160, endFrequency: nil, duration: 0.5, peak: 0.5),
                 Tone(waveform: .sawtooth, startFrequency: 120, endFrequency: nil, duration: 0.5, peak: 0.45, startTime: 0.12)
             ]
-            playEffect(render(tones: tones, noises: [], gain: 0.6), x: 0.5, proximity: 0.4, reverbBlend: 12)
+            playEffect(render(tones: tones, noises: [], gain: 0.6), x: 0.5, proximity: 0.4)
         }
     }
 
@@ -252,7 +281,7 @@ final class GameAudioEngine {
             Tone(waveform: .triangle, startFrequency: 185, endFrequency: 125, duration: 0.18, peak: 0.225, startTime: 0.055)
         ]
         let noises = [Noise(duration: 0.24, peak: 0.8075, lowPass: 850)]
-        playEffect(render(tones: tones, noises: noises, gain: 0.95), x: 0.5, proximity: 0.5, reverbBlend: 18)
+        playEffect(render(tones: tones, noises: noises, gain: 0.95), x: 0.5, proximity: 0.5)
     }
 
     private func makeVoices(count: Int) -> [SpatialVoice] {
@@ -265,23 +294,23 @@ final class GameAudioEngine {
         }
     }
 
-    private func playPuck(_ buffer: AVAudioPCMBuffer, x: Double, proximity: Double, reverbBlend: Double) {
+    private func playPuck(_ buffer: AVAudioPCMBuffer, x: Double, proximity: Double) {
         let voice = puckVoices[nextPuckVoice]
         nextPuckVoice = (nextPuckVoice + 1) % puckVoices.count
-        play(buffer, on: voice, x: x, proximity: proximity, reverbBlend: reverbBlend)
+        play(buffer, on: voice, x: x, proximity: proximity)
     }
 
-    private func playEffect(_ buffer: AVAudioPCMBuffer, x: Double, proximity: Double, reverbBlend: Double) {
+    private func playEffect(_ buffer: AVAudioPCMBuffer, x: Double, proximity: Double) {
         let voice = effectVoices[nextEffectVoice]
         nextEffectVoice = (nextEffectVoice + 1) % effectVoices.count
-        play(buffer, on: voice, x: x, proximity: proximity, reverbBlend: reverbBlend)
+        play(buffer, on: voice, x: x, proximity: proximity)
     }
 
-    private func play(_ buffer: AVAudioPCMBuffer, on voice: SpatialVoice, x: Double, proximity: Double, reverbBlend: Double) {
+    private func play(_ buffer: AVAudioPCMBuffer, on voice: SpatialVoice, x: Double, proximity: Double) {
         if !engine.isRunning { try? engine.start() }
         if voice.player.isPlaying { voice.player.stop() }
         voice.player.position = spatialPosition(x: x, proximity: proximity)
-        voice.player.reverbBlend = Float(clamp(reverbBlend / 100) * 100)
+        voice.player.reverbBlend = reverbBlend
         voice.player.volume = 1
         voice.player.scheduleBuffer(buffer)
         voice.player.play()
