@@ -6,40 +6,41 @@ struct StartView: View {
     let startTraining: () -> Void
     @State private var showingHowToPlay = false
     @State private var showingSettings = false
+    private var theme: GameTheme { GameTheme.all[settings.themeIndex] }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 24) {
-                    VStack(spacing: 6) {
+                VStack(spacing: 0) {
+                    VStack(spacing: 4) {
                         Text("Audio Showdown")
                             .font(.largeTitle.bold())
                         Text("By Chancey Fleet and Marco Salsiccia")
                             .font(.headline)
                     }
+                    .foregroundStyle(theme.line)
                     .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, minHeight: 112)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(theme.table)
+                    .contentShape(Rectangle())
                     .accessibilityElement(children: .combine)
                     .accessibilityAddTraits(.isHeader)
 
-                    VStack(spacing: 14) {
-                        Button("Start Game", action: startGame)
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.large)
-                        Button("How to Play") { showingHowToPlay = true }
-                        Button("Settings") { showingSettings = true }
-                        Button("Where the Fuck is the Puck?", action: startTraining)
-                    }
-                    .frame(maxWidth: .infinity)
-
-                    Divider()
-                    AboutAudioShowdownView()
+                    AppButtonRow(title: "Start Game", theme: theme, prominent: true, action: startGame)
+                    AppButtonRow(title: "How to Play", theme: theme) { showingHowToPlay = true }
+                    AppButtonRow(title: "Settings", theme: theme) { showingSettings = true }
+                    AppButtonRow(title: "Where the Fuck is the Puck?", theme: theme, action: startTraining)
                 }
-                .frame(maxWidth: 560)
-                .padding()
+                .frame(maxWidth: .infinity)
             }
+            .background(theme.background)
             .navigationBarHidden(true)
         }
-        .sheet(isPresented: $showingHowToPlay) { HowToPlayView() }
+        .background(theme.background.ignoresSafeArea())
+        .sheet(isPresented: $showingHowToPlay) { HowToPlayView(theme: theme) }
         .sheet(isPresented: $showingSettings) { SettingsView(settings: settings) }
     }
 }

@@ -29,12 +29,19 @@ final class AudioShowdownUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Audio Showdown, By Chancey Fleet and Marco Salsiccia"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["Start Game"].exists)
         XCTAssertTrue(app.buttons["Where the Fuck is the Puck?"].exists)
+        XCTAssertFalse(app.staticTexts["About Audio Showdown"].exists)
         app.buttons["How to Play"].tap()
         XCTAssertTrue(app.navigationBars["How to Play"].waitForExistence(timeout: 2))
         app.buttons["Done"].tap()
         app.buttons["Settings"].tap()
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.switches["Air Hockey Mode"].exists)
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "Opponent Skill").count, 1)
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "Game Speed").count, 1)
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "Sound Style").count, 1)
+        XCTAssertTrue(app.staticTexts["Haptics"].exists)
+        XCTAssertTrue(app.staticTexts["About Audio Showdown"].exists)
+        XCTAssertTrue(app.buttons["Submit Feedback"].exists)
     }
 
     @MainActor

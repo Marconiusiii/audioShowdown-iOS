@@ -17,31 +17,51 @@ struct GameView: View {
 
     var body: some View {
         let theme = GameTheme.all[settings.themeIndex]
-        VStack(spacing: 8) {
+        VStack(spacing: 0) {
             Text(training ? "Where the Fuck is the Puck?" : "Audio Showdown")
                 .font(.headline)
+                .foregroundStyle(theme.line)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, minHeight: 52)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(theme.table)
+                .contentShape(Rectangle())
                 .accessibilityAddTraits(.isHeader)
 
-            HStack {
-                Button("Home") {
-                    if training { returnHome() } else { showingHomeConfirmation = true }
+            if training {
+                Button(action: returnHome) {
+                    Text("Home")
+                        .frame(maxWidth: .infinity, minHeight: 56)
+                        .contentShape(Rectangle())
                 }
-                    .accessibilityHint(training ? "Returns to the start screen" : "Ends this game and returns to the start screen")
-                Spacer()
-                Text(model.scoreText)
-                    .font(.headline.monospacedDigit())
-                    .accessibilityLabel("Score, \(model.scoreText)")
-                Spacer()
-                if !training {
-                    Button(model.isPaused ? "Resume" : "Pause") { model.togglePause() }
-                        .disabled(model.isGameOver)
+                .buttonStyle(.plain)
+                .foregroundStyle(theme.accent)
+                .background(theme.background)
+                .accessibilityHint("Returns to the start screen")
+            } else {
+                HStack(spacing: 0) {
+                    gameBarButton("Home") { showingHomeConfirmation = true }
+
+                    Text("\(model.playerScore)–\(model.opponentScore)")
+                        .font(.headline.monospacedDigit())
+                        .foregroundStyle(theme.line)
+                        .frame(maxWidth: .infinity, minHeight: 56)
+                        .background(theme.background)
+                        .contentShape(Rectangle())
+                        .accessibilityLabel("Score, \(model.scoreText)")
+
+                    gameBarButton(model.isPaused ? "Resume" : "Pause") {
+                        model.togglePause()
+                    }
+                    .disabled(model.isGameOver)
                 }
             }
-            .padding(.horizontal)
 
             if model.isPaused {
-                Button("Settings") { showingSettings = true }
-                    .buttonStyle(.borderedProminent)
+                AppButtonRow(title: "Settings", theme: theme, prominent: true) {
+                    showingSettings = true
+                }
             }
 
             GeometryReader { proxy in
@@ -49,9 +69,7 @@ struct GameView: View {
                     .aspectRatio(0.5, contentMode: .fit)
                     .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottom)
             }
-            .padding(.horizontal, 6)
         }
-        .padding(.top, 4)
         .background(theme.background.ignoresSafeArea())
         .tint(theme.accent)
         .sheet(isPresented: $showingSettings) { SettingsView(settings: settings) }
@@ -64,5 +82,20 @@ struct GameView: View {
             try? await Task.sleep(for: .milliseconds(450))
             model.announceInitialState()
         }
+    }
+
+    private func gameBarButton(_ title: String, action: @escaping () -> Void) -> some View {
+        let theme = GameTheme.all[settings.themeIndex]
+        return Button(action: action) {
+            Text(title)
+                .font(.body.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, minHeight: 56)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(theme.accent)
+        .background(theme.background)
+        .contentShape(Rectangle())
     }
 }

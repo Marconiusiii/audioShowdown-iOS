@@ -123,8 +123,9 @@ final class GameAudioEngine {
             channels[0][frame] = sample
             channels[1][frame] = sample
         }
+        player.stop()
         player.scheduleBuffer(buffer)
-        if !player.isPlaying { player.play() }
+        player.play()
     }
 
     private func waveform(_ phase: Double, wave: Wave) -> Float {
