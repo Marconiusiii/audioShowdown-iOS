@@ -32,6 +32,7 @@ final class GameModel: ObservableObject {
     private var lastCenterSide = 0
     private var tapCount = 0
     private var lastTapTime: TimeInterval = 0
+    private var pendingGameOverRestart: DispatchWorkItem?
     private var placingPuck = false
     private var playerAirHockeyServeCount = 1
     private var computerAirHockeyServeCount = 0
@@ -59,9 +60,14 @@ final class GameModel: ObservableObject {
         min(max(y / height, 0), 1)
     }
 
-    static func proximityPingInterval(for proximity: Double) -> TimeInterval {
+    static func puckPulseInterval(speed: Int, speedsUpWhenApproaching: Bool, proximity: Double) -> TimeInterval {
         let clampedProximity = min(max(proximity, 0), 1)
-        return 0.25 - (0.25 - 0.058) * pow(clampedProximity, 0.8)
+        let speed = min(max(speed, 0), 2)
+        let nearIntervals = [0.30, 0.16, 0.058]
+        let selectedInterval = nearIntervals[speed]
+        guard speedsUpWhenApproaching else { return selectedInterval }
+        let farAdditions = [0.22, 0.22, 0.192]
+        return selectedInterval + farAdditions[speed] * pow(1 - clampedProximity, 0.8)
     }
 
     static func serveAnnouncement(server: Server, serveNumber: Int, playerScore: Int, computerScore: Int) -> String {
@@ -83,6 +89,7 @@ final class GameModel: ObservableObject {
         phase = training ? .training : .waitingForServe
         audio.prepare(volume: settings.volume)
         audio.setReverb(settings.reverbStyle)
+        audio.setPuckVolume(settings.puckVolume)
     }
 
     func announceInitialState() {
@@ -96,6 +103,7 @@ final class GameModel: ObservableObject {
     func tick(_ date: Date) {
         audio.setVolume(settings.volume)
         audio.setReverb(settings.reverbStyle)
+        audio.setPuckVolume(settings.puckVolume)
         let now = date.timeIntervalSinceReferenceDate
         guard let previousTime else { self.previousTime = now; return }
         self.previousTime = now
@@ -155,8 +163,16 @@ final class GameModel: ObservableObject {
         let window = phase == .gameOver || phase == .training ? 0.65 : 0.4
         tapCount = now - lastTapTime < window ? tapCount + 1 : 1
         lastTapTime = now
-        if phase == .gameOver, tapCount >= 2 { restart(); tapCount = 0 }
-        else if phase == .training, tapCount >= 2 { NotificationCenter.default.post(name: .trainingFinished, object: nil); tapCount = 0 }
+        if phase == .gameOver {
+            if tapCount >= 3 {
+                pendingGameOverRestart?.cancel()
+                pendingGameOverRestart = nil
+                tapCount = 0
+                NotificationCenter.default.post(name: .gameOverReturnHome, object: nil)
+            } else if tapCount == 2 {
+                scheduleGameOverRestart()
+            }
+        } else if phase == .training, tapCount >= 2 { NotificationCenter.default.post(name: .trainingFinished, object: nil); tapCount = 0 }
         else if phase == .live, tapCount >= 2 { togglePause(); tapCount = 0 }
     }
 
@@ -168,6 +184,8 @@ final class GameModel: ObservableObject {
     }
 
     func restart() {
+        pendingGameOverRestart?.cancel()
+        pendingGameOverRestart = nil
         playerScore = 0; opponentScore = 0; server = .player; serveNumber = 1
         playerAirHockeyServeCount = 1; computerAirHockeyServeCount = 0
         puck = Disc(x: 300, y: 600); phase = .waitingForServe; previousTime = nil
@@ -248,14 +266,16 @@ final class GameModel: ObservableObject {
     private func score(player: Bool) {
         let points = Self.pointsPerGoal(airHockeyMode: settings.airHockeyMode)
         if player { playerScore += points } else { opponentScore += points }
-        audio.goal(playerScored: player)
-        haptics.play(.goal, level: settings.haptics)
         advanceServe(pointToPlayer: player)
         if hasWinner {
             phase = .gameOver
+            if playerScore > opponentScore { audio.matchWon() }
+            else { audio.matchLost() }
             haptics.play(.gameOver, level: settings.haptics)
-            announce("\(playerScore > opponentScore ? "You win!" : "Computer wins.") Final score, \(scoreText). Double-tap the table to play again.")
+            announce("\(playerScore > opponentScore ? "You win!" : "Computer wins.") Final score, \(scoreText). Double-tap the table to play again. Triple-tap to return home.")
         } else {
+            audio.goal(playerScored: player)
+            haptics.play(.goal, level: settings.haptics)
             phase = .waitingForServe; puck = Disc(x: 300, y: 600)
             announce(serveAnnouncement)
         }
@@ -264,8 +284,21 @@ final class GameModel: ObservableObject {
     private func boardBall(againstPlayer: Bool) {
         if againstPlayer { opponentScore += 1 } else { playerScore += 1 }
         audio.boardBall(); haptics.play(.boardBall, level: settings.haptics)
-        advanceShowdownServe(); phase = .waitingForServe; puck = Disc(x: 300, y: 600)
-        announce("Board Ball. \(againstPlayer ? "Computer" : "You") scores one point. \(serveAnnouncement)")
+        advanceShowdownServe()
+        puck = Disc(x: 300, y: 600)
+        if hasWinner {
+            phase = .gameOver
+            haptics.play(.gameOver, level: settings.haptics)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { [weak self] in
+                guard let self, self.phase == .gameOver else { return }
+                if self.playerScore > self.opponentScore { self.audio.matchWon() }
+                else { self.audio.matchLost() }
+            }
+            announce("Board Ball. \(againstPlayer ? "Computer" : "You") wins. Final score, \(scoreText). Double-tap the table to play again. Triple-tap to return home.")
+        } else {
+            phase = .waitingForServe
+            announce("Board Ball. \(againstPlayer ? "Computer" : "You") scores one point. \(serveAnnouncement)")
+        }
     }
 
     private func advanceServe(pointToPlayer: Bool) {
@@ -290,9 +323,24 @@ final class GameModel: ObservableObject {
     private func updatePuckAudio(now: TimeInterval) {
         guard now >= nextPingTime else { return }
         let proximity = Self.playerProximity(forY: puck.y)
-        let base: TimeInterval = [Self.proximityPingInterval(for: proximity), 0.058, 0.16, 0.30][settings.pingRate]
+        let base = Self.puckPulseInterval(
+            speed: settings.pingRate,
+            speedsUpWhenApproaching: settings.speedsUpWhenApproaching,
+            proximity: proximity
+        )
         nextPingTime = now + max(0.055, base)
         audio.puckPing(x: puck.x / Self.width, distance: proximity, style: settings.puckSound, pitchBehavior: settings.pitchBehavior, lowerWhenCloser: settings.lowerPitchWhenCloser)
+    }
+
+    private func scheduleGameOverRestart() {
+        pendingGameOverRestart?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.phase == .gameOver, self.tapCount == 2 else { return }
+            self.tapCount = 0
+            self.restart()
+        }
+        pendingGameOverRestart = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
     }
 
     private var hasWinner: Bool {
@@ -320,4 +368,5 @@ final class GameModel: ObservableObject {
 
 extension Notification.Name {
     static let trainingFinished = Notification.Name("AudioShowdownTrainingFinished")
+    static let gameOverReturnHome = Notification.Name("AudioShowdownGameOverReturnHome")
 }

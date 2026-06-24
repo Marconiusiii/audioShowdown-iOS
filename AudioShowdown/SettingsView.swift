@@ -8,7 +8,7 @@ struct SettingsView: View {
 
     private let puckSounds = ["Woodblock", "Marimba", "Tick", "Sine beep", "Square beep", "Pluck", "Cowbell", "Clave", "Water drop", "Sonar ping", "Piano", "Chime", "Glass", "Tom", "Laser"]
     private let pitchNames = ["Pitch off", "Subtle", "Strong"]
-    private let pingNames = ["Approach pings faster", "Always pings fast", "Always pings medium", "Always pings slow"]
+    private let pulseSpeeds = ["Slow", "Medium", "Fast"]
     private let puckSizes = ["Classic", "Big", "Gigantic"]
     private let movementSounds = ["Off", "Hum", "Tick", "Pad", "Wood", "Thud", "Brush", "Pluck", "Bell", "Square"]
     private let strikeSounds = ["Thock", "Click", "Pop", "Knock", "Snare", "Wood", "Bonk", "Zap", "Boing", "Slap"]
@@ -95,6 +95,18 @@ struct SettingsView: View {
                         )
 
                         AppSectionHeading(title: "Puck Audio", theme: theme)
+                        AppAdjustableSliderRow(
+                            title: "Puck Volume",
+                            valueText: "\(Int(settings.puckVolume * 100)) percent",
+                            value: $settings.puckVolume,
+                            range: 0...1,
+                            step: 0.05,
+                            theme: theme,
+                            valueChanged: { value in
+                                previewAudio.setPuckVolume(value)
+                                previewPuckSound(settings.puckSound)
+                            }
+                        )
                         AppCategoricalSliderRow(
                             title: "Sound Style",
                             choices: puckSounds,
@@ -111,9 +123,14 @@ struct SettingsView: View {
                         )
                         AppToggleRow(title: "Lower Pitch When Closer", isOn: $settings.lowerPitchWhenCloser, theme: theme)
                         AppCategoricalSliderRow(
-                            title: "Ping Rate",
-                            choices: pingNames,
+                            title: "Pulse Speed",
+                            choices: pulseSpeeds,
                             selection: $settings.pingRate,
+                            theme: theme
+                        )
+                        AppToggleRow(
+                            title: "Speed Up When Approaching",
+                            isOn: $settings.speedsUpWhenApproaching,
                             theme: theme
                         )
                         AppToggleRow(title: "Center Crossing Sound", isOn: $settings.centerCrossingSound, theme: theme)
@@ -170,6 +187,7 @@ struct SettingsView: View {
         .onAppear {
             previewAudio.prepare(volume: settings.volume)
             previewAudio.setReverb(settings.reverbStyle)
+            previewAudio.setPuckVolume(settings.puckVolume)
         }
     }
 

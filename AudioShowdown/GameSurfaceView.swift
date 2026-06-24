@@ -33,8 +33,8 @@ struct GameSurfaceView: View {
                     }
             )
             .accessibilityElement()
-            .accessibilityLabel(model.isGameOver ? "Game over table. Double-tap to play again." : "Audio Showdown table")
-            .accessibilityHint("Direct Touch area. Touch and drag to play. Double-tap to pause the game.")
+            .accessibilityLabel(model.isGameOver ? "Game over table. Double-tap to play again. Triple-tap to return home." : "Audio Showdown table")
+            .accessibilityHint(model.isGameOver ? "Direct Touch area with replay and Home gestures." : "Direct Touch area. Touch and drag to play. Double-tap to pause the game.")
             .accessibilityDirectTouch(options: .silentOnTouch)
                 .onChange(of: timeline.date) { _, date in model.tick(date) }
             }

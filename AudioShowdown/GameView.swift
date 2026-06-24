@@ -77,6 +77,7 @@ struct GameView: View {
         .tint(theme.accent)
         .sheet(isPresented: $showingSettings) { SettingsView(settings: settings) }
         .onReceive(NotificationCenter.default.publisher(for: .trainingFinished)) { _ in returnHome() }
+        .onReceive(NotificationCenter.default.publisher(for: .gameOverReturnHome)) { _ in returnHome() }
         .task {
             try? await Task.sleep(for: .milliseconds(450))
             model.announceInitialState()

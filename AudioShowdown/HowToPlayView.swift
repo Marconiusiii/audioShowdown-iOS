@@ -36,7 +36,7 @@ struct HowToPlayView: View {
                     ])
                     section("Stay in Control", rows: [
                         "Double-tap the table to pause. The table steps aside so you can resume, change settings, or end the game with ordinary VoiceOver controls.",
-                        "After the match, double-tap the table to play again. To leave a match, pause and choose End Game."
+                        "After the match, double-tap the table to play again or triple-tap to return home. To leave during a match, pause and choose End Game."
                     ])
                     section("Where the Fuck is the Puck?", rows: [
                         "Training mode lets you drag the puck anywhere and chase its sound without a score breathing down your neck. Double-tap the table when you’re done."

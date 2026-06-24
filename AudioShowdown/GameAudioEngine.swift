@@ -23,11 +23,14 @@ final class GameAudioEngine {
     }
 
     private final class SpatialVoice {
-        let player = AVAudioPlayerNode()
+        let dryPlayer = AVAudioPlayerNode()
+        let wetPlayer = AVAudioPlayerNode()
     }
 
     private let engine = AVAudioEngine()
-    private let environment = AVAudioEnvironmentNode()
+    private let dryEnvironment = AVAudioEnvironmentNode()
+    private let wetEnvironment = AVAudioEnvironmentNode()
+    private let wetMixer = AVAudioMixerNode()
     private let sourceFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
     private var puckVoices: [SpatialVoice] = []
     private var effectVoices: [SpatialVoice] = []
@@ -35,18 +38,22 @@ final class GameAudioEngine {
     private var nextEffectVoice = 0
     private var started = false
     private var reverbStyle = -1
-    private var reverbBlend: Float = 0
+    private var puckVolume = 0.8
+    private var lastWinMotifIndex = -1
+    private var lastLossMotifIndex = -1
 
     init() {
-        engine.attach(environment)
-        engine.connect(environment, to: engine.mainMixerNode, format: nil)
-        environment.listenerPosition = AVAudio3DPoint(x: 0, y: 0, z: 0)
-        environment.listenerAngularOrientation = AVAudio3DAngularOrientation(yaw: 0, pitch: 0, roll: 0)
-        environment.distanceAttenuationParameters.distanceAttenuationModel = .inverse
-        environment.distanceAttenuationParameters.referenceDistance = 0.8
-        environment.distanceAttenuationParameters.maximumDistance = 30
-        environment.distanceAttenuationParameters.rolloffFactor = 0.6
-        environment.reverbParameters.enable = false
+        engine.attach(dryEnvironment)
+        engine.attach(wetEnvironment)
+        engine.attach(wetMixer)
+        engine.connect(dryEnvironment, to: engine.mainMixerNode, format: nil)
+        engine.connect(wetEnvironment, to: wetMixer, format: nil)
+        engine.connect(wetMixer, to: engine.mainMixerNode, format: nil)
+        configureSpatialEnvironment(dryEnvironment)
+        configureSpatialEnvironment(wetEnvironment)
+        dryEnvironment.reverbParameters.enable = false
+        wetEnvironment.reverbParameters.enable = true
+        wetMixer.outputVolume = 0
         puckVoices = makeVoices(count: 10)
         effectVoices = makeVoices(count: 16)
     }
@@ -73,32 +80,29 @@ final class GameAudioEngine {
         engine.mainMixerNode.outputVolume = Float(volume)
     }
 
+    func setPuckVolume(_ volume: Double) {
+        puckVolume = clamp(volume)
+    }
+
     func setReverb(_ style: Int) {
         let style = min(max(style, 0), 3)
         guard style != reverbStyle else { return }
         reverbStyle = style
         switch style {
         case 1:
-            environment.reverbParameters.loadFactoryReverbPreset(.smallRoom)
-            environment.reverbParameters.level = -26
-            reverbBlend = 2.5
-            environment.reverbParameters.enable = true
+            wetEnvironment.reverbParameters.loadFactoryReverbPreset(.smallRoom)
+            wetEnvironment.reverbParameters.level = 0
+            wetMixer.outputVolume = 0.025
         case 2:
-            environment.reverbParameters.loadFactoryReverbPreset(.largeRoom)
-            environment.reverbParameters.level = -25
-            reverbBlend = 4
-            environment.reverbParameters.enable = true
+            wetEnvironment.reverbParameters.loadFactoryReverbPreset(.largeRoom)
+            wetEnvironment.reverbParameters.level = 0
+            wetMixer.outputVolume = 0.04
         case 3:
-            environment.reverbParameters.loadFactoryReverbPreset(.largeHall)
-            environment.reverbParameters.level = -24
-            reverbBlend = 6.5
-            environment.reverbParameters.enable = true
+            wetEnvironment.reverbParameters.loadFactoryReverbPreset(.largeHall)
+            wetEnvironment.reverbParameters.level = 0
+            wetMixer.outputVolume = 0.065
         default:
-            reverbBlend = 0
-            environment.reverbParameters.enable = false
-        }
-        for voice in puckVoices + effectVoices {
-            voice.player.reverbBlend = reverbBlend
+            wetMixer.outputVolume = 0
         }
     }
 
@@ -106,7 +110,7 @@ final class GameAudioEngine {
         let near = clamp(proximity)
         let pitchAmount = [0.0, 0.6, 1.4][pitchBehavior]
         let pitchMultiplier = 1 + pitchAmount * (lowerWhenCloser ? 1 - near : near)
-        let gain = min(1, 0.30 + 0.70 * near)
+        let gain = min(1, 0.30 + 0.70 * near) * puckVolume
         let tones: [Tone]
         let noises: [Noise]
 
@@ -284,12 +288,70 @@ final class GameAudioEngine {
         playEffect(render(tones: tones, noises: noises, gain: 0.95), x: 0.5, proximity: 0.5)
     }
 
+    func matchWon() {
+        let motifs = [
+            [261.63, 329.63, 392.00, 523.25],
+            [293.66, 392.00, 440.00, 587.33],
+            [349.23, 440.00, 523.25, 698.46]
+        ]
+        let motifIndex = nonRepeatingIndex(count: motifs.count, excluding: lastWinMotifIndex)
+        lastWinMotifIndex = motifIndex
+        let motif = motifs[motifIndex]
+        let beat = Double.random(in: 0.105...0.125)
+        var tones: [Tone] = []
+        for (index, frequency) in motif.enumerated() {
+            let start = Double(index) * beat
+            tones.append(Tone(waveform: .triangle, startFrequency: frequency, endFrequency: nil, duration: 0.24, peak: 0.46, startTime: start))
+            tones.append(Tone(waveform: .sine, startFrequency: frequency * 2, endFrequency: nil, duration: 0.17, peak: 0.16, startTime: start))
+        }
+        playEffect(render(tones: tones, noises: [], gain: 0.72), x: 0.5, proximity: 0.72)
+
+        let sparkleNotes = [1_046.50, 1_174.66, 1_318.51, 1_396.91, 1_568.0, 1_760.0, 2_093.0]
+        for index in 0..<7 {
+            let frequency = sparkleNotes.randomElement()!
+            let delay = 0.18 + Double(index) * Double.random(in: 0.045...0.075)
+            let sparkle = [
+                Tone(waveform: .sine, startFrequency: frequency, endFrequency: frequency * 1.04, duration: 0.18, peak: 0.30, startTime: delay),
+                Tone(waveform: .sine, startFrequency: frequency * 2.02, endFrequency: nil, duration: 0.10, peak: 0.10, startTime: delay)
+            ]
+            playEffect(
+                render(tones: sparkle, noises: [], gain: Double.random(in: 0.42...0.58)),
+                x: Double.random(in: 0.08...0.92),
+                proximity: Double.random(in: 0.5...0.9)
+            )
+        }
+    }
+
+    func matchLost() {
+        let motifs: [[(Double, Double)]] = [
+            [(233.08, 196.00), (196.00, 164.81), (174.61, 130.81)],
+            [(261.63, 220.00), (220.00, 174.61), (196.00, 146.83)],
+            [(220.00, 185.00), (185.00, 155.56), (164.81, 123.47)]
+        ]
+        let motifIndex = nonRepeatingIndex(count: motifs.count, excluding: lastLossMotifIndex)
+        lastLossMotifIndex = motifIndex
+        let motif = motifs[motifIndex]
+        let beat = Double.random(in: 0.24...0.29)
+        var tones: [Tone] = []
+        for (index, note) in motif.enumerated() {
+            let start = Double(index) * beat
+            tones.append(Tone(waveform: .sawtooth, startFrequency: note.0, endFrequency: note.1, duration: beat * 1.16, peak: 0.28, startTime: start, attack: 0.025))
+            tones.append(Tone(waveform: .triangle, startFrequency: note.0 * 0.5, endFrequency: note.1 * 0.5, duration: beat * 1.2, peak: 0.18, startTime: start, attack: 0.03))
+        }
+        playEffect(render(tones: tones, noises: [], gain: Double.random(in: 0.68...0.78), lowPass: 1_600), x: 0.5, proximity: 0.6)
+    }
+
     private func makeVoices(count: Int) -> [SpatialVoice] {
         (0..<count).map { _ in
             let voice = SpatialVoice()
-            engine.attach(voice.player)
-            engine.connect(voice.player, to: environment, format: sourceFormat)
-            voice.player.renderingAlgorithm = .HRTFHQ
+            engine.attach(voice.dryPlayer)
+            engine.attach(voice.wetPlayer)
+            engine.connect(voice.dryPlayer, to: dryEnvironment, format: sourceFormat)
+            engine.connect(voice.wetPlayer, to: wetEnvironment, format: sourceFormat)
+            voice.dryPlayer.renderingAlgorithm = .HRTFHQ
+            voice.dryPlayer.reverbBlend = 0
+            voice.wetPlayer.renderingAlgorithm = .HRTFHQ
+            voice.wetPlayer.reverbBlend = 100
             return voice
         }
     }
@@ -308,12 +370,29 @@ final class GameAudioEngine {
 
     private func play(_ buffer: AVAudioPCMBuffer, on voice: SpatialVoice, x: Double, proximity: Double) {
         if !engine.isRunning { try? engine.start() }
-        if voice.player.isPlaying { voice.player.stop() }
-        voice.player.position = spatialPosition(x: x, proximity: proximity)
-        voice.player.reverbBlend = reverbBlend
-        voice.player.volume = 1
-        voice.player.scheduleBuffer(buffer)
-        voice.player.play()
+        let position = spatialPosition(x: x, proximity: proximity)
+        if voice.dryPlayer.isPlaying { voice.dryPlayer.stop() }
+        voice.dryPlayer.position = position
+        voice.dryPlayer.volume = 1
+        voice.dryPlayer.scheduleBuffer(buffer)
+        voice.dryPlayer.play()
+
+        if reverbStyle > 0 {
+            if voice.wetPlayer.isPlaying { voice.wetPlayer.stop() }
+            voice.wetPlayer.position = position
+            voice.wetPlayer.volume = 1
+            voice.wetPlayer.scheduleBuffer(buffer)
+            voice.wetPlayer.play()
+        }
+    }
+
+    private func configureSpatialEnvironment(_ environment: AVAudioEnvironmentNode) {
+        environment.listenerPosition = AVAudio3DPoint(x: 0, y: 0, z: 0)
+        environment.listenerAngularOrientation = AVAudio3DAngularOrientation(yaw: 0, pitch: 0, roll: 0)
+        environment.distanceAttenuationParameters.distanceAttenuationModel = .inverse
+        environment.distanceAttenuationParameters.referenceDistance = 0.8
+        environment.distanceAttenuationParameters.maximumDistance = 30
+        environment.distanceAttenuationParameters.rolloffFactor = 0.6
     }
 
     private func spatialPosition(x: Double, proximity: Double) -> AVAudio3DPoint {
@@ -414,8 +493,13 @@ final class GameAudioEngine {
     }
 
     private func pentatonicFrequency(near: Double, pitchBehavior: Int, lowerWhenCloser: Bool) -> Double {
-        let notes = [146.83, 174.61, 196, 220, 261.63, 293.66, 349.23, 392, 440, 523.25, 587.33]
-        let span = pitchBehavior == 0 ? 0 : (pitchBehavior == 1 ? 4 : notes.count - 1)
+        let notes = [
+            73.42, 87.31, 98.00, 110.00, 130.81,
+            146.83, 174.61, 196.00, 220.00, 261.63,
+            293.66, 349.23, 392.00, 440.00, 523.25,
+            587.33, 698.46, 783.99, 880.00, 1_046.50
+        ]
+        let span = pitchBehavior == 0 ? 0 : (pitchBehavior == 1 ? 9 : notes.count - 1)
         let start = (notes.count - 1 - span) / 2
         let position = lowerWhenCloser ? 1 - near : near
         return notes[start + Int((clamp(position) * Double(span)).rounded())]
@@ -423,5 +507,10 @@ final class GameAudioEngine {
 
     private func clamp(_ value: Double) -> Double {
         min(max(value, 0), 1)
+    }
+
+    private func nonRepeatingIndex(count: Int, excluding previous: Int) -> Int {
+        let choices = (0..<count).filter { $0 != previous }
+        return choices.randomElement() ?? 0
     }
 }

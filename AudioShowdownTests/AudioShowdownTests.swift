@@ -50,13 +50,36 @@ struct AudioShowdownTests {
     }
 
     @Test func puckPingsAccelerateTowardPlayer() {
-        let topInterval = GameModel.proximityPingInterval(for: 0)
-        let centerInterval = GameModel.proximityPingInterval(for: 0.5)
-        let bottomInterval = GameModel.proximityPingInterval(for: 1)
+        let topInterval = GameModel.puckPulseInterval(speed: 2, speedsUpWhenApproaching: true, proximity: 0)
+        let centerInterval = GameModel.puckPulseInterval(speed: 2, speedsUpWhenApproaching: true, proximity: 0.5)
+        let bottomInterval = GameModel.puckPulseInterval(speed: 2, speedsUpWhenApproaching: true, proximity: 1)
         #expect(topInterval > centerInterval)
         #expect(centerInterval > bottomInterval)
         #expect(abs(topInterval - 0.25) < 0.0001)
         #expect(abs(bottomInterval - 0.058) < 0.0001)
+    }
+
+    @Test func pulseSpeedRemainsConstantWhenApproachSpeedupIsOff() {
+        let topInterval = GameModel.puckPulseInterval(speed: 1, speedsUpWhenApproaching: false, proximity: 0)
+        let bottomInterval = GameModel.puckPulseInterval(speed: 1, speedsUpWhenApproaching: false, proximity: 1)
+        #expect(topInterval == 0.16)
+        #expect(bottomInterval == 0.16)
+    }
+
+    @Test func oldApproachPulseSettingMigratesToMediumWithSpeedup() {
+        let suiteName = "AudioShowdownTests.PulseMigration.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(0, forKey: "pingRate")
+
+        let settings = GameSettings(defaults: defaults)
+        #expect(settings.pingRate == 1)
+        #expect(settings.speedsUpWhenApproaching)
+        #expect(settings.puckVolume == 0.8)
+
+        let restoredSettings = GameSettings(defaults: defaults)
+        #expect(restoredSettings.pingRate == 1)
+        #expect(restoredSettings.speedsUpWhenApproaching)
     }
 
     @Test func serveAnnouncementsPutServerAndServerScoreFirst() {

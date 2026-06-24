@@ -19,6 +19,8 @@ final class GameSettings: ObservableObject {
     @Published var pitchBehavior: Int { didSet { save() } }
     @Published var lowerPitchWhenCloser: Bool { didSet { save() } }
     @Published var pingRate: Int { didSet { save() } }
+    @Published var speedsUpWhenApproaching: Bool { didSet { save() } }
+    @Published var puckVolume: Double { didSet { save() } }
     @Published var centerCrossingSound: Bool { didSet { save() } }
     @Published var centerCrossingVolume: Double { didSet { save() } }
     @Published var movementSound: Int { didSet { save() } }
@@ -37,7 +39,20 @@ final class GameSettings: ObservableObject {
         puckSound = Self.clamp(defaults.object(forKey: "puckSound") as? Int ?? 0, 0...14)
         pitchBehavior = Self.clamp(defaults.object(forKey: "pitchBehavior") as? Int ?? 0, 0...2)
         lowerPitchWhenCloser = defaults.bool(forKey: "lowerPitch")
-        pingRate = Self.clamp(defaults.object(forKey: "pingRate") as? Int ?? 0, 0...3)
+        let savedPulseVersion = defaults.integer(forKey: "pulseSettingsVersion")
+        if savedPulseVersion >= 2 {
+            pingRate = Self.clamp(defaults.object(forKey: "pingRate") as? Int ?? 1, 0...2)
+            speedsUpWhenApproaching = defaults.object(forKey: "speedsUpWhenApproaching") as? Bool ?? true
+        } else {
+            let oldPingRate = Self.clamp(defaults.object(forKey: "pingRate") as? Int ?? 0, 0...3)
+            switch oldPingRate {
+            case 1: pingRate = 2; speedsUpWhenApproaching = false
+            case 2: pingRate = 1; speedsUpWhenApproaching = false
+            case 3: pingRate = 0; speedsUpWhenApproaching = false
+            default: pingRate = 1; speedsUpWhenApproaching = true
+            }
+        }
+        puckVolume = Self.clamp(defaults.object(forKey: "puckVolume") as? Double ?? 0.8, 0...1)
         centerCrossingSound = defaults.object(forKey: "centerSound") as? Bool ?? true
         centerCrossingVolume = Self.clamp(defaults.object(forKey: "centerVolume") as? Double ?? 0.5, 0...1)
         movementSound = Self.clamp(defaults.object(forKey: "movementSound") as? Int ?? 1, 0...9)
@@ -46,6 +61,11 @@ final class GameSettings: ObservableObject {
         volume = Self.clamp(defaults.object(forKey: "volume") as? Double ?? 0.8, 0...1)
         reverbStyle = Self.clamp(defaults.object(forKey: "reverbStyle") as? Int ?? 0, 0...3)
         haptics = HapticsLevel(rawValue: defaults.string(forKey: "haptics") ?? "") ?? .subtle
+        if savedPulseVersion < 2 {
+            defaults.set(pingRate, forKey: "pingRate")
+            defaults.set(speedsUpWhenApproaching, forKey: "speedsUpWhenApproaching")
+        }
+        defaults.set(2, forKey: "pulseSettingsVersion")
     }
 
     private func save() {
@@ -57,6 +77,9 @@ final class GameSettings: ObservableObject {
         defaults.set(pitchBehavior, forKey: "pitchBehavior")
         defaults.set(lowerPitchWhenCloser, forKey: "lowerPitch")
         defaults.set(pingRate, forKey: "pingRate")
+        defaults.set(speedsUpWhenApproaching, forKey: "speedsUpWhenApproaching")
+        defaults.set(2, forKey: "pulseSettingsVersion")
+        defaults.set(puckVolume, forKey: "puckVolume")
         defaults.set(centerCrossingSound, forKey: "centerSound")
         defaults.set(centerCrossingVolume, forKey: "centerVolume")
         defaults.set(movementSound, forKey: "movementSound")
