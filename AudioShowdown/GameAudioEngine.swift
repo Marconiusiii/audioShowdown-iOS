@@ -2,138 +2,397 @@ import AVFoundation
 
 @MainActor
 final class GameAudioEngine {
-    private enum Wave { case sine, triangle, square, saw }
+    private enum Waveform { case sine, triangle, square, sawtooth }
+
+    private struct Tone {
+        let waveform: Waveform
+        let startFrequency: Double
+        let endFrequency: Double?
+        let duration: TimeInterval
+        let peak: Double
+        var startTime: TimeInterval = 0
+        var attack: TimeInterval = 0.004
+    }
+
+    private struct Noise {
+        let duration: TimeInterval
+        let peak: Double
+        var highPass: Double? = nil
+        var lowPass: Double? = nil
+        var startTime: TimeInterval = 0
+    }
+
+    private final class SpatialVoice {
+        let player = AVAudioPlayerNode()
+    }
+
     private let engine = AVAudioEngine()
-    private let puckPlayer = AVAudioPlayerNode()
-    private let effectsPlayer = AVAudioPlayerNode()
-    private let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
+    private let environment = AVAudioEnvironmentNode()
+    private let sourceFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
+    private var puckVoices: [SpatialVoice] = []
+    private var effectVoices: [SpatialVoice] = []
+    private var nextPuckVoice = 0
+    private var nextEffectVoice = 0
     private var started = false
 
     init() {
-        engine.attach(puckPlayer)
-        engine.attach(effectsPlayer)
-        engine.connect(puckPlayer, to: engine.mainMixerNode, format: format)
-        engine.connect(effectsPlayer, to: engine.mainMixerNode, format: format)
+        engine.attach(environment)
+        engine.connect(environment, to: engine.mainMixerNode, format: nil)
+        environment.listenerPosition = AVAudio3DPoint(x: 0, y: 0, z: 0)
+        environment.listenerAngularOrientation = AVAudio3DAngularOrientation(yaw: 0, pitch: 0, roll: 0)
+        environment.distanceAttenuationParameters.distanceAttenuationModel = .inverse
+        environment.distanceAttenuationParameters.referenceDistance = 0.8
+        environment.distanceAttenuationParameters.maximumDistance = 30
+        environment.distanceAttenuationParameters.rolloffFactor = 0.6
+        environment.reverbParameters.enable = true
+        environment.reverbParameters.loadFactoryReverbPreset(.mediumHall)
+        environment.reverbParameters.level = -18
+        puckVoices = makeVoices(count: 10)
+        effectVoices = makeVoices(count: 16)
     }
 
     func prepare(volume: Double) {
         engine.mainMixerNode.outputVolume = Float(volume)
-        guard !started else { return }
         do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-            try session.setActive(true)
-            try engine.start()
+            if !started {
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                try session.setPreferredSampleRate(sourceFormat.sampleRate)
+                try session.setPreferredIOBufferDuration(0.005)
+                try session.setActive(true)
+                engine.prepare()
+            }
+            if !engine.isRunning { try engine.start() }
             started = true
-        } catch {}
-    }
-
-    func setVolume(_ volume: Double) { engine.mainMixerNode.outputVolume = Float(volume) }
-
-    func puckPing(x: Double, distance proximity: Double, style: Int, pitchBehavior: Int, lowerWhenCloser: Bool) {
-        let closeness = max(0, min(1, proximity))
-        let pitchRange = [0.0, 0.6, 1.4][pitchBehavior]
-        var pitch = pitchRange == 0 ? 1 : pow(2, (lowerWhenCloser ? 1 - closeness : closeness) * pitchRange - pitchRange / 2)
-        if style == 10 || style == 11 { pitch = pentatonicPitch(closeness: closeness, range: pitchRange, lower: lowerWhenCloser) }
-        puckPlayer.pan = Float(max(-1, min(1, x * 2 - 1)))
-        puckPlayer.volume = Float(0.2 + closeness * 0.8)
-        switch style {
-        case 0: play(player: puckPlayer, frequency: 560 * pitch, endFrequency: 430 * pitch, duration: 0.07, noise: 0.2, wave: .triangle)
-        case 1: play(player: puckPlayer, frequency: 700 * pitch, duration: 0.26, harmonics: [(2, 0.24)])
-        case 2: play(player: puckPlayer, frequency: 3_500 * pitch, duration: 0.02, noise: 0.9)
-        case 3: play(player: puckPlayer, frequency: 880 * pitch, duration: 0.09)
-        case 4: play(player: puckPlayer, frequency: 620 * pitch, duration: 0.08, wave: .square)
-        case 5: play(player: puckPlayer, frequency: 540 * pitch, endFrequency: 470 * pitch, duration: 0.13, wave: .triangle)
-        case 6: play(player: puckPlayer, frequency: 540 * pitch, duration: 0.12, harmonics: [(800.0 / 540.0, 0.55)], wave: .square)
-        case 7: play(player: puckPlayer, frequency: 2_000 * pitch, duration: 0.04, noise: 0.3)
-        case 8: play(player: puckPlayer, frequency: 1_300 * pitch, endFrequency: 480 * pitch, duration: 0.16)
-        case 9: play(player: puckPlayer, frequency: 990 * pitch, endFrequency: 1_080 * pitch, duration: 0.3)
-        case 10: play(player: puckPlayer, frequency: 220 * pitch, duration: 0.2, harmonics: [(2, 0.5), (3, 0.22)], wave: .triangle)
-        case 11: play(player: puckPlayer, frequency: 440 * pitch, duration: 0.4, harmonics: [(2.76, 0.5), (5.4, 0.3)])
-        case 12: play(player: puckPlayer, frequency: 1_760 * pitch, duration: 0.18, harmonics: [(3, 0.4)])
-        case 13: play(player: puckPlayer, frequency: 190 * pitch, endFrequency: 95 * pitch, duration: 0.18, noise: 0.18)
-        default: play(player: puckPlayer, frequency: 1_400 * pitch, endFrequency: 320 * pitch, duration: 0.16, wave: .saw)
+        } catch {
+            started = false
         }
     }
 
-    func strike(style: Int, x: Double) {
-        effectsPlayer.pan = Float(max(-1, min(1, x * 2 - 1)))
-        let frequencies = [480.0, 1_700, 620, 420, 450, 700, 300, 1_700, 360, 320]
-        let endFrequencies: [Double?] = [nil, nil, 320, nil, nil, 560, nil, 300, 720, nil]
-        let noise = [0.5, 0.65, 0, 0.25, 0.65, 0, 0, 0, 0, 0.55]
-        play(player: effectsPlayer, frequency: frequencies[style], endFrequency: endFrequencies[style], duration: style == 6 || style == 8 ? 0.12 : 0.07, noise: noise[style], wave: style == 7 ? .saw : .triangle)
+    func setVolume(_ volume: Double) {
+        engine.mainMixerNode.outputVolume = Float(volume)
+    }
+
+    func puckPing(x: Double, distance proximity: Double, style: Int, pitchBehavior: Int, lowerWhenCloser: Bool) {
+        let near = clamp(proximity)
+        let pitchAmount = [0.0, 0.6, 1.4][pitchBehavior]
+        let pitchMultiplier = 1 + pitchAmount * (lowerWhenCloser ? 1 - near : near)
+        let gain = min(1, 0.30 + 0.70 * near)
+        let tones: [Tone]
+        let noises: [Noise]
+
+        switch style {
+        case 0:
+            tones = [Tone(waveform: .triangle, startFrequency: 560 * pitchMultiplier, endFrequency: 430 * pitchMultiplier, duration: 0.07, peak: 0.5)]
+            noises = [Noise(duration: 0.03, peak: 0.25, highPass: 2_200 * pitchMultiplier)]
+        case 1:
+            tones = [
+                Tone(waveform: .sine, startFrequency: 700 * pitchMultiplier, endFrequency: nil, duration: 0.26, peak: 0.5),
+                Tone(waveform: .sine, startFrequency: 1_400 * pitchMultiplier, endFrequency: nil, duration: 0.14, peak: 0.12)
+            ]
+            noises = []
+        case 2:
+            tones = []
+            noises = [Noise(duration: 0.02, peak: 0.6, highPass: 3_500 * pitchMultiplier)]
+        case 3:
+            tones = [Tone(waveform: .sine, startFrequency: 880 * pitchMultiplier, endFrequency: nil, duration: 0.09, peak: 0.5)]
+            noises = []
+        case 4:
+            tones = [Tone(waveform: .square, startFrequency: 620 * pitchMultiplier, endFrequency: nil, duration: 0.08, peak: 0.32)]
+            noises = []
+        case 5:
+            tones = [Tone(waveform: .triangle, startFrequency: 540 * pitchMultiplier, endFrequency: 470 * pitchMultiplier, duration: 0.13, peak: 0.5)]
+            noises = []
+        case 6:
+            tones = [
+                Tone(waveform: .square, startFrequency: 540 * pitchMultiplier, endFrequency: nil, duration: 0.12, peak: 0.18),
+                Tone(waveform: .square, startFrequency: 800 * pitchMultiplier, endFrequency: nil, duration: 0.12, peak: 0.168)
+            ]
+            noises = []
+        case 7:
+            tones = [Tone(waveform: .sine, startFrequency: 2_000 * pitchMultiplier, endFrequency: nil, duration: 0.04, peak: 0.5)]
+            noises = [Noise(duration: 0.015, peak: 0.4, highPass: 4_000 * pitchMultiplier)]
+        case 8:
+            tones = [Tone(waveform: .sine, startFrequency: 1_300 * pitchMultiplier, endFrequency: 480 * pitchMultiplier, duration: 0.16, peak: 0.5)]
+            noises = []
+        case 9:
+            tones = [Tone(waveform: .sine, startFrequency: 990 * pitchMultiplier, endFrequency: 1_080 * pitchMultiplier, duration: 0.3, peak: 0.45)]
+            noises = []
+        case 10:
+            let frequency = pentatonicFrequency(near: near, pitchBehavior: pitchBehavior, lowerWhenCloser: lowerWhenCloser)
+            tones = [
+                Tone(waveform: .triangle, startFrequency: frequency, endFrequency: nil, duration: 0.20, peak: 0.5),
+                Tone(waveform: .sine, startFrequency: frequency * 2, endFrequency: nil, duration: 0.12, peak: 0.20),
+                Tone(waveform: .sine, startFrequency: frequency * 3, endFrequency: nil, duration: 0.07, peak: 0.066)
+            ]
+            noises = []
+        case 11:
+            let frequency = pentatonicFrequency(near: near, pitchBehavior: pitchBehavior, lowerWhenCloser: lowerWhenCloser) * 2
+            tones = [
+                Tone(waveform: .sine, startFrequency: frequency, endFrequency: nil, duration: 0.4, peak: 0.5),
+                Tone(waveform: .sine, startFrequency: frequency * 2.76, endFrequency: nil, duration: 0.3, peak: 0.175),
+                Tone(waveform: .sine, startFrequency: frequency * 5.4, endFrequency: nil, duration: 0.18, peak: 0.075)
+            ]
+            noises = []
+        case 12:
+            tones = [
+                Tone(waveform: .sine, startFrequency: 1_760 * pitchMultiplier, endFrequency: nil, duration: 0.18, peak: 0.45),
+                Tone(waveform: .sine, startFrequency: 5_280 * pitchMultiplier, endFrequency: nil, duration: 0.1, peak: 0.12)
+            ]
+            noises = []
+        case 13:
+            tones = [Tone(waveform: .sine, startFrequency: 190 * pitchMultiplier, endFrequency: 95 * pitchMultiplier, duration: 0.18, peak: 0.55)]
+            noises = [Noise(duration: 0.04, peak: 0.12, lowPass: 500)]
+        default:
+            tones = [Tone(waveform: .sawtooth, startFrequency: 1_400 * pitchMultiplier, endFrequency: 320 * pitchMultiplier, duration: 0.16, peak: 0.4)]
+            noises = []
+        }
+
+        let cutoff = 2_000 + 16_000 * near
+        let buffer = render(tones: tones, noises: noises, gain: gain, lowPass: cutoff)
+        playPuck(buffer, x: x, proximity: near, reverbBlend: 5 + 20 * (1 - near))
+    }
+
+    func strike(style: Int, x: Double, byPlayer: Bool = true) {
+        let baseGain = 0.75
+        let tones: [Tone]
+        let noises: [Noise]
+        switch style {
+        case 0:
+            tones = [Tone(waveform: .triangle, startFrequency: byPlayer ? 480 : 180, endFrequency: nil, duration: 0.1, peak: 0.4)]
+            noises = [Noise(duration: 0.09, peak: 0.5, highPass: byPlayer ? 800 : 280, lowPass: byPlayer ? 7_000 : 2_600)]
+        case 1:
+            tones = [Tone(waveform: .triangle, startFrequency: byPlayer ? 1_700 : 1_000, endFrequency: nil, duration: 0.03, peak: 0.35)]
+            noises = [Noise(duration: 0.02, peak: 0.6, highPass: byPlayer ? 3_200 : 2_000)]
+        case 2:
+            tones = [Tone(waveform: .sine, startFrequency: byPlayer ? 620 : 340, endFrequency: byPlayer ? 320 : 180, duration: 0.07, peak: 0.5)]
+            noises = []
+        case 3:
+            tones = [Tone(waveform: .triangle, startFrequency: byPlayer ? 420 : 220, endFrequency: nil, duration: 0.05, peak: 0.45)]
+            noises = [Noise(duration: 0.02, peak: 0.15, highPass: 1_500)]
+        case 4:
+            tones = [Tone(waveform: .triangle, startFrequency: byPlayer ? 450 : 250, endFrequency: nil, duration: 0.05, peak: 0.18)]
+            noises = [Noise(duration: 0.08, peak: 0.5, highPass: 1_200)]
+        case 5:
+            tones = [Tone(waveform: .triangle, startFrequency: byPlayer ? 700 : 380, endFrequency: byPlayer ? 560 : 300, duration: 0.05, peak: 0.45)]
+            noises = []
+        case 6:
+            tones = [Tone(waveform: .sine, startFrequency: byPlayer ? 300 : 150, endFrequency: nil, duration: 0.12, peak: 0.55)]
+            noises = []
+        case 7:
+            tones = [Tone(waveform: .sawtooth, startFrequency: byPlayer ? 1_700 : 1_000, endFrequency: 300, duration: 0.08, peak: 0.4)]
+            noises = []
+        case 8:
+            tones = [Tone(waveform: .sine, startFrequency: byPlayer ? 360 : 200, endFrequency: byPlayer ? 720 : 420, duration: 0.12, peak: 0.5)]
+            noises = []
+        default:
+            tones = [Tone(waveform: .sine, startFrequency: byPlayer ? 320 : 180, endFrequency: nil, duration: 0.06, peak: 0.21)]
+            noises = [Noise(duration: 0.06, peak: 0.5, lowPass: 1_200)]
+        }
+        playEffect(render(tones: tones, noises: noises, gain: baseGain), x: x, proximity: byPlayer ? 0.9 : 0.15, reverbBlend: 8)
     }
 
     func malletMovement(style: Int, x: Double) {
-        effectsPlayer.pan = Float(max(-1, min(1, x * 2 - 1)))
-        let frequencies = [0.0, 150, 1_500, 220, 300, 110, 4_000, 260, 600, 170]
-        let durations = [0.0, 0.05, 0.02, 0.12, 0.04, 0.08, 0.025, 0.07, 0.1, 0.05]
-        play(player: effectsPlayer, frequency: frequencies[style], duration: durations[style], noise: style == 2 || style == 6 ? 0.9 : 0, wave: style == 9 ? .square : (style == 4 || style == 7 ? .triangle : .sine))
+        guard style > 0 else { return }
+        let tone: Tone?
+        let noise: Noise?
+        switch style {
+        case 1: tone = Tone(waveform: .sine, startFrequency: 150, endFrequency: nil, duration: 0.05, peak: 0.22); noise = nil
+        case 2: tone = nil; noise = Noise(duration: 0.02, peak: 0.3, highPass: 1_500)
+        case 3: tone = Tone(waveform: .sine, startFrequency: 220, endFrequency: nil, duration: 0.12, peak: 0.18); noise = nil
+        case 4: tone = Tone(waveform: .triangle, startFrequency: 300, endFrequency: 240, duration: 0.04, peak: 0.25); noise = nil
+        case 5: tone = Tone(waveform: .sine, startFrequency: 110, endFrequency: nil, duration: 0.08, peak: 0.3); noise = nil
+        case 6: tone = nil; noise = Noise(duration: 0.025, peak: 0.25, highPass: 4_000)
+        case 7: tone = Tone(waveform: .triangle, startFrequency: 260, endFrequency: nil, duration: 0.07, peak: 0.25); noise = nil
+        case 8: tone = Tone(waveform: .sine, startFrequency: 600, endFrequency: nil, duration: 0.1, peak: 0.2); noise = nil
+        default: tone = Tone(waveform: .square, startFrequency: 170, endFrequency: nil, duration: 0.05, peak: 0.18); noise = nil
+        }
+        playEffect(render(tones: tone.map { [$0] } ?? [], noises: noise.map { [$0] } ?? [], gain: 0.35), x: x, proximity: 0.95, reverbBlend: 3)
     }
 
     func ricochet(x: Double, speed: Double) {
-        effectsPlayer.pan = Float(max(-1, min(1, x * 2 - 1)))
-        let strength = max(0.18, min(1, speed / 1_400))
-        effectsPlayer.volume = Float(strength)
-        play(player: effectsPlayer, frequency: 1_050, endFrequency: 760, duration: 0.055, noise: 0.32, harmonics: [(0.2, 0.25), (2.25, 0.2)], wave: .triangle)
+        guard speed >= 80 else { return }
+        let velocity = min(1, speed / 1_400)
+        let gain = 0.22 + 0.72 * velocity
+        let centerFrequency = 1_050.0
+        let tones = [
+            Tone(waveform: .triangle, startFrequency: centerFrequency, endFrequency: centerFrequency * 0.72, duration: 0.04 + 0.02 * velocity, peak: 0.4),
+            Tone(waveform: .sine, startFrequency: 200, endFrequency: nil, duration: 0.05, peak: 0.11),
+            Tone(waveform: .sine, startFrequency: 2_300, endFrequency: nil, duration: 0.025, peak: 0.07)
+        ]
+        let noises = [Noise(duration: 0.012, peak: 0.6, highPass: 3_000 + 2_600 * velocity)]
+        playEffect(render(tones: tones, noises: noises, gain: gain), x: x, proximity: 0.5, reverbBlend: 10)
     }
 
     func centerCrossing(volume: Double) {
-        effectsPlayer.pan = 0
-        effectsPlayer.volume = Float(volume)
-        play(player: effectsPlayer, frequency: 500, endFrequency: 1_900, duration: 0.3, noise: 0.7)
+        let tones = [Tone(waveform: .sine, startFrequency: 500, endFrequency: 1_900, duration: 0.30, peak: 0.12)]
+        let noises = [Noise(duration: 0.33, peak: 0.42, highPass: 400, lowPass: 2_100)]
+        playEffect(render(tones: tones, noises: noises, gain: volume), x: 0.5, proximity: 0.5, reverbBlend: 18)
     }
 
     func goal(playerScored: Bool) {
-        effectsPlayer.pan = playerScored ? 0.45 : -0.45
         if playerScored {
-            play(player: effectsPlayer, frequency: 523, endFrequency: 1_047, duration: 0.4, harmonics: [(1.26, 0.4), (1.5, 0.35)], wave: .triangle)
+            let tones = [523.0, 659, 784, 1_047].enumerated().map { index, frequency in
+                Tone(waveform: .triangle, startFrequency: frequency, endFrequency: nil, duration: 0.18, peak: 0.5, startTime: Double(index) * 0.07)
+            }
+            playEffect(render(tones: tones, noises: [], gain: 0.6), x: 0.5, proximity: 0.7, reverbBlend: 16)
         } else {
-            play(player: effectsPlayer, frequency: 160, endFrequency: 120, duration: 0.5, wave: .saw)
+            let tones = [
+                Tone(waveform: .sawtooth, startFrequency: 160, endFrequency: nil, duration: 0.5, peak: 0.5),
+                Tone(waveform: .sawtooth, startFrequency: 120, endFrequency: nil, duration: 0.5, peak: 0.45, startTime: 0.12)
+            ]
+            playEffect(render(tones: tones, noises: [], gain: 0.6), x: 0.5, proximity: 0.4, reverbBlend: 12)
         }
     }
 
     func boardBall() {
-        effectsPlayer.pan = 0
-        play(player: effectsPlayer, frequency: 115, duration: 0.25, noise: 0.65)
+        let tones = [
+            Tone(waveform: .triangle, startFrequency: 118, endFrequency: 72, duration: 0.32, peak: 0.63),
+            Tone(waveform: .sine, startFrequency: 310, endFrequency: 205, duration: 0.22, peak: 0.275),
+            Tone(waveform: .triangle, startFrequency: 185, endFrequency: 125, duration: 0.18, peak: 0.225, startTime: 0.055)
+        ]
+        let noises = [Noise(duration: 0.24, peak: 0.8075, lowPass: 850)]
+        playEffect(render(tones: tones, noises: noises, gain: 0.95), x: 0.5, proximity: 0.5, reverbBlend: 18)
     }
 
-    private func pentatonicPitch(closeness: Double, range: Double, lower: Bool) -> Double {
-        let notes = [146.83, 174.61, 196, 220, 261.63, 293.66, 349.23, 392, 440, 523.25, 587.33]
-        let span = range == 0 ? 0 : (range < 1 ? 4 : notes.count - 1)
-        let start = (notes.count - 1 - span) / 2
-        let position = lower ? 1 - closeness : closeness
-        return notes[start + Int((position * Double(span)).rounded())] / 220
-    }
-
-    private func play(player: AVAudioPlayerNode, frequency: Double, endFrequency: Double? = nil, duration: Double, noise: Double = 0, harmonics: [(Double, Double)] = [], wave: Wave = .sine) {
-        let frames = AVAudioFrameCount(format.sampleRate * duration)
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames), let channels = buffer.floatChannelData else { return }
-        buffer.frameLength = frames
-        for frame in 0..<Int(frames) {
-            let t = Double(frame) / format.sampleRate
-            let envelope = Float(pow(max(0, 1 - t / duration), 2.2))
-            let progress = t / duration
-            let currentFrequency = frequency + ((endFrequency ?? frequency) - frequency) * progress
-            let phase = 2 * Double.pi * currentFrequency * t
-            var tone = waveform(phase, wave: wave)
-            for harmonic in harmonics { tone += Float(harmonic.1) * waveform(phase * harmonic.0, wave: .sine) }
-            let random = Float.random(in: -1...1)
-            let sample = (tone * Float(1 - noise) + random * Float(noise)) * envelope * 0.55
-            channels[0][frame] = sample
-            channels[1][frame] = sample
+    private func makeVoices(count: Int) -> [SpatialVoice] {
+        (0..<count).map { _ in
+            let voice = SpatialVoice()
+            engine.attach(voice.player)
+            engine.connect(voice.player, to: environment, format: sourceFormat)
+            voice.player.renderingAlgorithm = .HRTFHQ
+            return voice
         }
-        player.stop()
-        player.scheduleBuffer(buffer)
-        player.play()
     }
 
-    private func waveform(_ phase: Double, wave: Wave) -> Float {
-        switch wave {
-        case .sine: return Float(sin(phase))
-        case .triangle: return Float(2 / Double.pi * asin(sin(phase)))
+    private func playPuck(_ buffer: AVAudioPCMBuffer, x: Double, proximity: Double, reverbBlend: Double) {
+        let voice = puckVoices[nextPuckVoice]
+        nextPuckVoice = (nextPuckVoice + 1) % puckVoices.count
+        play(buffer, on: voice, x: x, proximity: proximity, reverbBlend: reverbBlend)
+    }
+
+    private func playEffect(_ buffer: AVAudioPCMBuffer, x: Double, proximity: Double, reverbBlend: Double) {
+        let voice = effectVoices[nextEffectVoice]
+        nextEffectVoice = (nextEffectVoice + 1) % effectVoices.count
+        play(buffer, on: voice, x: x, proximity: proximity, reverbBlend: reverbBlend)
+    }
+
+    private func play(_ buffer: AVAudioPCMBuffer, on voice: SpatialVoice, x: Double, proximity: Double, reverbBlend: Double) {
+        if !engine.isRunning { try? engine.start() }
+        if voice.player.isPlaying { voice.player.stop() }
+        voice.player.position = spatialPosition(x: x, proximity: proximity)
+        voice.player.reverbBlend = Float(clamp(reverbBlend / 100) * 100)
+        voice.player.volume = 1
+        voice.player.scheduleBuffer(buffer)
+        voice.player.play()
+    }
+
+    private func spatialPosition(x: Double, proximity: Double) -> AVAudio3DPoint {
+        let horizontal = Float((clamp(x) - 0.5) * 4.8)
+        let depth = Float(-(0.5 + (1 - clamp(proximity)) * 5.0))
+        return AVAudio3DPoint(x: horizontal, y: 0, z: depth)
+    }
+
+    private func render(tones: [Tone], noises: [Noise], gain: Double, lowPass: Double? = nil) -> AVAudioPCMBuffer {
+        let duration = max(
+            tones.map { $0.startTime + $0.duration }.max() ?? 0,
+            noises.map { $0.startTime + $0.duration }.max() ?? 0
+        )
+        let frameCount = max(1, Int(ceil(duration * sourceFormat.sampleRate)))
+        let buffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(frameCount))!
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        let samples = buffer.floatChannelData![0]
+
+        for tone in tones { add(tone: tone, gain: gain, to: samples, frameCount: frameCount) }
+        for noise in noises { add(noise: noise, gain: gain, to: samples, frameCount: frameCount) }
+        if let lowPass { applyLowPass(cutoff: lowPass, samples: samples, frameCount: frameCount) }
+        for frame in 0..<frameCount { samples[frame] = tanh(samples[frame]) }
+        return buffer
+    }
+
+    private func add(tone: Tone, gain: Double, to samples: UnsafeMutablePointer<Float>, frameCount: Int) {
+        let sampleRate = sourceFormat.sampleRate
+        let startFrame = Int(tone.startTime * sampleRate)
+        let toneFrames = min(Int(tone.duration * sampleRate), frameCount - startFrame)
+        guard toneFrames > 0 else { return }
+        var phase = 0.0
+        for frame in 0..<toneFrames {
+            let time = Double(frame) / sampleRate
+            let progress = min(1, time / tone.duration)
+            let frequency: Double
+            if let end = tone.endFrequency, tone.startFrequency > 0, end > 0 {
+                frequency = tone.startFrequency * pow(end / tone.startFrequency, progress)
+            } else {
+                frequency = tone.startFrequency
+            }
+            phase += 2 * Double.pi * frequency / sampleRate
+            let envelope = amplitudeEnvelope(time: time, duration: tone.duration, attack: tone.attack, peak: tone.peak)
+            samples[startFrame + frame] += Float(waveformSample(phase: phase, waveform: tone.waveform) * envelope * gain)
+        }
+    }
+
+    private func add(noise: Noise, gain: Double, to samples: UnsafeMutablePointer<Float>, frameCount: Int) {
+        let sampleRate = sourceFormat.sampleRate
+        let startFrame = Int(noise.startTime * sampleRate)
+        let noiseFrames = min(Int(noise.duration * sampleRate), frameCount - startFrame)
+        guard noiseFrames > 0 else { return }
+        var lowPassState = 0.0
+        var previousInput = 0.0
+        var highPassState = 0.0
+        let lowAlpha = noise.lowPass.map { 1 - exp(-2 * Double.pi * $0 / sampleRate) }
+        let highAlpha = noise.highPass.map { exp(-2 * Double.pi * $0 / sampleRate) }
+
+        for frame in 0..<noiseFrames {
+            let time = Double(frame) / sampleRate
+            var value = Double.random(in: -1...1)
+            if let alpha = lowAlpha {
+                lowPassState += alpha * (value - lowPassState)
+                value = lowPassState
+            }
+            if let alpha = highAlpha {
+                highPassState = alpha * (highPassState + value - previousInput)
+                previousInput = value
+                value = highPassState
+            }
+            let envelope = amplitudeEnvelope(time: time, duration: noise.duration, attack: 0, peak: noise.peak)
+            samples[startFrame + frame] += Float(value * envelope * gain)
+        }
+    }
+
+    private func applyLowPass(cutoff: Double, samples: UnsafeMutablePointer<Float>, frameCount: Int) {
+        let alpha = 1 - exp(-2 * Double.pi * cutoff / sourceFormat.sampleRate)
+        var state = 0.0
+        for frame in 0..<frameCount {
+            state += alpha * (Double(samples[frame]) - state)
+            samples[frame] = Float(state)
+        }
+    }
+
+    private func amplitudeEnvelope(time: TimeInterval, duration: TimeInterval, attack: TimeInterval, peak: Double) -> Double {
+        if attack > 0, time < attack { return peak * max(0.0001, time / attack) }
+        let decayDuration = max(0.001, duration - attack)
+        let decayProgress = min(1, max(0, (time - attack) / decayDuration))
+        return peak * pow(0.0001 / max(peak, 0.0001), decayProgress)
+    }
+
+    private func waveformSample(phase: Double, waveform: Waveform) -> Double {
+        switch waveform {
+        case .sine: return sin(phase)
+        case .triangle: return 2 / Double.pi * asin(sin(phase))
         case .square: return sin(phase) >= 0 ? 1 : -1
-        case .saw: return Float(2 * (phase / (2 * .pi) - floor(phase / (2 * .pi) + 0.5)))
+        case .sawtooth: return 2 * (phase / (2 * Double.pi) - floor(phase / (2 * Double.pi) + 0.5))
         }
+    }
+
+    private func pentatonicFrequency(near: Double, pitchBehavior: Int, lowerWhenCloser: Bool) -> Double {
+        let notes = [146.83, 174.61, 196, 220, 261.63, 293.66, 349.23, 392, 440, 523.25, 587.33]
+        let span = pitchBehavior == 0 ? 0 : (pitchBehavior == 1 ? 4 : notes.count - 1)
+        let start = (notes.count - 1 - span) / 2
+        let position = lowerWhenCloser ? 1 - near : near
+        return notes[start + Int((clamp(position) * Double(span)).rounded())]
+    }
+
+    private func clamp(_ value: Double) -> Double {
+        min(max(value, 0), 1)
     }
 }

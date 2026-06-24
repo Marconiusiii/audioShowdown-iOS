@@ -33,12 +33,13 @@ final class GameModel: ObservableObject {
     private var tapCount = 0
     private var lastTapTime: TimeInterval = 0
     private var placingPuck = false
+    private var playerAirHockeyServeCount = 1
+    private var computerAirHockeyServeCount = 0
     private let training: Bool
 
     var isPaused: Bool { phase == .paused }
     var isGameOver: Bool { phase == .gameOver }
-    var scoreText: String { "You \(playerScore), Opponent \(opponentScore)" }
-    var modeName: String { settings.airHockeyMode ? "Air Hockey" : "Showdown" }
+    var scoreText: String { "You \(playerScore), Computer \(opponentScore)" }
     var puckRadius: Double { [26, 34, 42][settings.puckSize] }
 
     static func pointsPerGoal(airHockeyMode: Bool) -> Int {
@@ -63,6 +64,19 @@ final class GameModel: ObservableObject {
         return 0.25 - (0.25 - 0.058) * pow(clampedProximity, 0.8)
     }
 
+    static func serveAnnouncement(server: Server, serveNumber: Int, playerScore: Int, computerScore: Int) -> String {
+        let ordinal = ordinalWord(serveNumber)
+        if server == .player {
+            return "Your \(ordinal) serve, \(playerScore) serving \(computerScore)"
+        }
+        return "Computer's \(ordinal) serve, \(computerScore) serving \(playerScore)"
+    }
+
+    private static func ordinalWord(_ number: Int) -> String {
+        let words = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"]
+        return words.indices.contains(number - 1) ? words[number - 1] : "\(number)th"
+    }
+
     init(settings: GameSettings, training: Bool) {
         self.settings = settings
         self.training = training
@@ -74,7 +88,7 @@ final class GameModel: ObservableObject {
         if training {
             announce("Training mode. Drag the puck around the table and follow the sound. Double-tap the table to return home.")
         } else {
-            announce("Starting \(modeName). \(serveAnnouncement)")
+            announce(serveAnnouncement)
         }
     }
 
@@ -132,15 +146,16 @@ final class GameModel: ObservableObject {
     }
 
     func touchEnded(wasTap: Bool) {
+        let wasPlacingPuck = placingPuck
         placingPuck = false
-        guard wasTap else { return }
+        guard wasTap, !wasPlacingPuck else { return }
         let now = Date.timeIntervalSinceReferenceDate
         let window = phase == .gameOver || phase == .training ? 0.65 : 0.4
         tapCount = now - lastTapTime < window ? tapCount + 1 : 1
         lastTapTime = now
         if phase == .gameOver, tapCount >= 2 { restart(); tapCount = 0 }
         else if phase == .training, tapCount >= 2 { NotificationCenter.default.post(name: .trainingFinished, object: nil); tapCount = 0 }
-        else if phase == .live, tapCount >= 3 { togglePause(); tapCount = 0 }
+        else if phase == .live, tapCount >= 2 { togglePause(); tapCount = 0 }
     }
 
     func togglePause() {
@@ -152,8 +167,9 @@ final class GameModel: ObservableObject {
 
     func restart() {
         playerScore = 0; opponentScore = 0; server = .player; serveNumber = 1
+        playerAirHockeyServeCount = 1; computerAirHockeyServeCount = 0
         puck = Disc(x: 300, y: 600); phase = .waitingForServe; previousTime = nil
-        announce("New \(modeName) game. \(serveAnnouncement)")
+        announce(serveAnnouncement)
     }
 
     private func movePlayer(to point: CGPoint) {
@@ -203,7 +219,7 @@ final class GameModel: ObservableObject {
         let impulse = max(520, hypot(mallet.vx, mallet.vy) * 1.25)
         puck.vx = nx * impulse + mallet.vx * 0.65
         puck.vy = ny * impulse + mallet.vy * 0.65
-        audio.strike(style: settings.strikeSound, x: puck.x / Self.width)
+        audio.strike(style: settings.strikeSound, x: puck.x / Self.width, byPlayer: isPlayer)
         haptics.play(.strike, level: settings.haptics)
     }
 
@@ -231,10 +247,10 @@ final class GameModel: ObservableObject {
         if hasWinner {
             phase = .gameOver
             haptics.play(.gameOver, level: settings.haptics)
-            announce("\(playerScore > opponentScore ? "You win!" : "Opponent wins.") Final score, \(scoreText). Double-tap the table to play again.")
+            announce("\(playerScore > opponentScore ? "You win!" : "Computer wins.") Final score, \(scoreText). Double-tap the table to play again.")
         } else {
             phase = .waitingForServe; puck = Disc(x: 300, y: 600)
-            announce("\(player ? "Goal!" : "Opponent scores.") \(serveAnnouncement)")
+            announce(serveAnnouncement)
         }
     }
 
@@ -242,12 +258,17 @@ final class GameModel: ObservableObject {
         if againstPlayer { opponentScore += 1 } else { playerScore += 1 }
         audio.boardBall(); haptics.play(.boardBall, level: settings.haptics)
         advanceShowdownServe(); phase = .waitingForServe; puck = Disc(x: 300, y: 600)
-        announce("Board Ball. \(againstPlayer ? "Opponent" : "You") scores one point. \(serveAnnouncement)")
+        announce("Board Ball. \(againstPlayer ? "Computer" : "You") scores one point. \(serveAnnouncement)")
     }
 
     private func advanceServe(pointToPlayer: Bool) {
-        if settings.airHockeyMode { server = pointToPlayer ? .opponent : .player }
-        else { advanceShowdownServe() }
+        if settings.airHockeyMode {
+            server = pointToPlayer ? .opponent : .player
+            if server == .player { playerAirHockeyServeCount += 1 }
+            else { computerAirHockeyServeCount += 1 }
+        } else {
+            advanceShowdownServe()
+        }
     }
 
     private func advanceShowdownServe() {
@@ -272,9 +293,18 @@ final class GameModel: ObservableObject {
     }
 
     private var serveAnnouncement: String {
-        if settings.airHockeyMode { return "\(server == .player ? "Your" : "Opponent’s") serve. \(scoreText)." }
-        let ordinal = ["first", "second", "third", "fourth", "fifth"][serveNumber - 1]
-        return "\(server == .player ? "Your" : "Opponent’s") \(ordinal) serve. \(scoreText)."
+        let currentServeNumber: Int
+        if settings.airHockeyMode {
+            currentServeNumber = server == .player ? playerAirHockeyServeCount : computerAirHockeyServeCount
+        } else {
+            currentServeNumber = serveNumber
+        }
+        return Self.serveAnnouncement(
+            server: server,
+            serveNumber: currentServeNumber,
+            playerScore: playerScore,
+            computerScore: opponentScore
+        )
     }
 
     private func announce(_ text: String) { UIAccessibility.post(notification: .announcement, argument: text) }

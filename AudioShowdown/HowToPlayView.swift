@@ -35,8 +35,8 @@ struct HowToPlayView: View {
                         "Turn on Air Hockey Mode in Settings for classic one-point goals and alternating serves. First to seven wins."
                     ])
                     section("Stay in Control", rows: [
-                        "Score, Pause, and Home sit above the table. VoiceOver can reach them without entering the playing area.",
-                        "After the match, double-tap the table to play again, or choose Home to head back."
+                        "Double-tap the table to pause. The table steps aside so you can resume, change settings, or end the game with ordinary VoiceOver controls.",
+                        "After the match, double-tap the table to play again. To leave a match, pause and choose End Game."
                     ])
                     section("Where the Fuck is the Puck?", rows: [
                         "Training mode lets you drag the puck anywhere and chase its sound without a score breathing down your neck. Double-tap the table when you’re done."

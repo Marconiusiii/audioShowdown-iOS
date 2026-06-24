@@ -44,4 +44,23 @@ struct AudioShowdownTests {
         #expect(abs(topInterval - 0.25) < 0.0001)
         #expect(abs(bottomInterval - 0.058) < 0.0001)
     }
+
+    @Test func serveAnnouncementsPutServerAndServerScoreFirst() {
+        #expect(
+            GameModel.serveAnnouncement(
+                server: .player,
+                serveNumber: 3,
+                playerScore: 6,
+                computerScore: 4
+            ) == "Your third serve, 6 serving 4"
+        )
+        #expect(
+            GameModel.serveAnnouncement(
+                server: .opponent,
+                serveNumber: 2,
+                playerScore: 6,
+                computerScore: 8
+            ) == "Computer's second serve, 8 serving 6"
+        )
+    }
 }

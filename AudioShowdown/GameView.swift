@@ -6,7 +6,6 @@ struct GameView: View {
     let returnHome: () -> Void
     @StateObject private var model: GameModel
     @State private var showingSettings = false
-    @State private var showingHomeConfirmation = false
 
     init(settings: GameSettings, training: Bool, returnHome: @escaping () -> Void) {
         self.settings = settings
@@ -29,54 +28,54 @@ struct GameView: View {
                 .contentShape(Rectangle())
                 .accessibilityAddTraits(.isHeader)
 
-            if training {
-                Button(action: returnHome) {
-                    Text("Home")
-                        .frame(maxWidth: .infinity, minHeight: 56)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(theme.accent)
-                .background(theme.background)
-                .accessibilityHint("Returns to the start screen")
-            } else {
-                HStack(spacing: 0) {
-                    gameBarButton("Home") { showingHomeConfirmation = true }
-
-                    Text("\(model.playerScore)–\(model.opponentScore)")
-                        .font(.headline.monospacedDigit())
-                        .foregroundStyle(theme.line)
-                        .frame(maxWidth: .infinity, minHeight: 56)
-                        .background(theme.background)
-                        .contentShape(Rectangle())
-                        .accessibilityLabel("Score, \(model.scoreText)")
-
-                    gameBarButton(model.isPaused ? "Resume" : "Pause") {
-                        model.togglePause()
-                    }
-                    .disabled(model.isGameOver)
-                }
+            if !training {
+                Text("\(model.playerScore)–\(model.opponentScore)")
+                    .font(.headline.monospacedDigit())
+                    .foregroundStyle(theme.line)
+                    .frame(maxWidth: .infinity, minHeight: 56)
+                    .background(theme.background)
+                    .contentShape(Rectangle())
+                    .accessibilityLabel("Score, \(model.scoreText)")
             }
 
             if model.isPaused {
-                AppButtonRow(title: "Settings", theme: theme, prominent: true) {
-                    showingSettings = true
-                }
-            }
+                VStack(spacing: 0) {
+                    Text("Game Paused")
+                        .font(.title2.weight(.black))
+                        .foregroundStyle(theme.line)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, minHeight: 72)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 8)
+                        .background(theme.table)
+                        .contentShape(Rectangle())
+                        .accessibilityAddTraits(.isHeader)
 
-            GeometryReader { proxy in
-                GameSurfaceView(model: model, theme: theme)
-                    .aspectRatio(0.5, contentMode: .fit)
-                    .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottom)
+                    AppButtonRow(title: "End Game", theme: theme) {
+                        returnHome()
+                    }
+                    AppButtonRow(title: "Resume Game", theme: theme, prominent: true) {
+                        model.togglePause()
+                    }
+                    AppButtonRow(title: "Settings", theme: theme) {
+                        showingSettings = true
+                    }
+
+                    AppTextRow(text: "\(model.scoreText).", theme: theme, alignment: .center)
+                    Spacer(minLength: 0)
+                }
+                .background(theme.background)
+            } else {
+                GeometryReader { proxy in
+                    GameSurfaceView(model: model, theme: theme)
+                        .aspectRatio(0.5, contentMode: .fit)
+                        .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottom)
+                }
             }
         }
         .background(theme.background.ignoresSafeArea())
         .tint(theme.accent)
         .sheet(isPresented: $showingSettings) { SettingsView(settings: settings) }
-        .confirmationDialog("End this game?", isPresented: $showingHomeConfirmation) {
-            Button("End Game and Return Home", role: .destructive, action: returnHome)
-            Button("Keep Playing", role: .cancel) {}
-        }
         .onReceive(NotificationCenter.default.publisher(for: .trainingFinished)) { _ in returnHome() }
         .task {
             try? await Task.sleep(for: .milliseconds(450))
@@ -84,18 +83,4 @@ struct GameView: View {
         }
     }
 
-    private func gameBarButton(_ title: String, action: @escaping () -> Void) -> some View {
-        let theme = GameTheme.all[settings.themeIndex]
-        return Button(action: action) {
-            Text(title)
-                .font(.body.weight(.semibold))
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, minHeight: 56)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(theme.accent)
-        .background(theme.background)
-        .contentShape(Rectangle())
-    }
 }

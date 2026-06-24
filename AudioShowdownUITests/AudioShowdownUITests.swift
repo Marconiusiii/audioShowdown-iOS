@@ -49,6 +49,26 @@ final class AudioShowdownUITests: XCTestCase {
     }
 
     @MainActor
+    func testDoubleTapReplacesTableWithPauseScreen() throws {
+        let app = XCUIApplication()
+        app.launch()
+        app.buttons["Start Game"].tap()
+
+        let table = app.descendants(matching: .any)["Audio Showdown table"]
+        XCTAssertTrue(table.waitForExistence(timeout: 3))
+        let serveStart = table.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.82))
+        let serveEnd = table.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+        serveStart.press(forDuration: 0.15, thenDragTo: serveEnd)
+        table.doubleTap()
+
+        XCTAssertTrue(app.staticTexts["Game Paused"].waitForExistence(timeout: 2))
+        XCTAssertFalse(table.exists)
+        XCTAssertTrue(app.buttons["End Game"].exists)
+        XCTAssertTrue(app.buttons["Resume Game"].exists)
+        XCTAssertTrue(app.buttons["Settings"].exists)
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
