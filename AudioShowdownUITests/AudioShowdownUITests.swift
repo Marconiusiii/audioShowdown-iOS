@@ -23,14 +23,18 @@ final class AudioShowdownUITests: XCTestCase {
     }
 
     @MainActor
-    func testExample() throws {
-        // UI tests must launch the application that they test.
+    func testStartScreenAndSheets() throws {
         let app = XCUIApplication()
         app.launch()
-
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // XCUIAutomation Documentation
-        // https://developer.apple.com/documentation/xcuiautomation
+        XCTAssertTrue(app.staticTexts["Audio Showdown, By Chancey Fleet and Marco Salsiccia"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Start Game"].exists)
+        XCTAssertTrue(app.buttons["Where the Fuck is the Puck?"].exists)
+        app.buttons["How to Play"].tap()
+        XCTAssertTrue(app.navigationBars["How to Play"].waitForExistence(timeout: 2))
+        app.buttons["Done"].tap()
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.switches["Air Hockey Mode"].exists)
     }
 
     @MainActor
