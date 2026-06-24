@@ -54,6 +54,15 @@ final class GameModel: ObservableObject {
         serveNumber >= 5 ? (server == .player ? .opponent : .player, 1) : (server, serveNumber + 1)
     }
 
+    static func playerProximity(forY y: Double) -> Double {
+        min(max(y / height, 0), 1)
+    }
+
+    static func proximityPingInterval(for proximity: Double) -> TimeInterval {
+        let clampedProximity = min(max(proximity, 0), 1)
+        return 0.25 - (0.25 - 0.058) * pow(clampedProximity, 0.8)
+    }
+
     init(settings: GameSettings, training: Bool) {
         self.settings = settings
         self.training = training
@@ -252,11 +261,10 @@ final class GameModel: ObservableObject {
 
     private func updatePuckAudio(now: TimeInterval) {
         guard now >= nextPingTime else { return }
-        let distance = max(0, min(1, puck.y / Self.height))
-        let approaching = puck.vy > 0
-        let base: TimeInterval = [0.24 - 0.17 * (1 - distance), 0.16, 0.28, 0.07][settings.pingRate]
+        let proximity = Self.playerProximity(forY: puck.y)
+        let base: TimeInterval = [Self.proximityPingInterval(for: proximity), 0.058, 0.16, 0.30][settings.pingRate]
         nextPingTime = now + max(0.055, base)
-        audio.puckPing(x: puck.x / Self.width, distance: distance, style: settings.puckSound, pitchBehavior: settings.pitchBehavior, lowerWhenCloser: settings.lowerPitchWhenCloser && approaching)
+        audio.puckPing(x: puck.x / Self.width, distance: proximity, style: settings.puckSound, pitchBehavior: settings.pitchBehavior, lowerWhenCloser: settings.lowerPitchWhenCloser)
     }
 
     private var hasWinner: Bool {

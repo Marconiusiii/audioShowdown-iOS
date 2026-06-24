@@ -30,8 +30,8 @@ final class GameAudioEngine {
 
     func setVolume(_ volume: Double) { engine.mainMixerNode.outputVolume = Float(volume) }
 
-    func puckPing(x: Double, distance: Double, style: Int, pitchBehavior: Int, lowerWhenCloser: Bool) {
-        let closeness = 1 - max(0, min(1, distance))
+    func puckPing(x: Double, distance proximity: Double, style: Int, pitchBehavior: Int, lowerWhenCloser: Bool) {
+        let closeness = max(0, min(1, proximity))
         let pitchRange = [0.0, 0.6, 1.4][pitchBehavior]
         var pitch = pitchRange == 0 ? 1 : pow(2, (lowerWhenCloser ? 1 - closeness : closeness) * pitchRange - pitchRange / 2)
         if style == 10 || style == 11 { pitch = pentatonicPitch(closeness: closeness, range: pitchRange, lower: lowerWhenCloser) }

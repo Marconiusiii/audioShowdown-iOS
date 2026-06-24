@@ -28,4 +28,20 @@ struct AudioShowdownTests {
         #expect(changedServer.0 == .opponent)
         #expect(changedServer.1 == 1)
     }
+
+    @Test func playerProximityIncreasesTowardBottomOfTable() {
+        #expect(GameModel.playerProximity(forY: 0) == 0)
+        #expect(GameModel.playerProximity(forY: GameModel.center) == 0.5)
+        #expect(GameModel.playerProximity(forY: GameModel.height) == 1)
+    }
+
+    @Test func puckPingsAccelerateTowardPlayer() {
+        let topInterval = GameModel.proximityPingInterval(for: 0)
+        let centerInterval = GameModel.proximityPingInterval(for: 0.5)
+        let bottomInterval = GameModel.proximityPingInterval(for: 1)
+        #expect(topInterval > centerInterval)
+        #expect(centerInterval > bottomInterval)
+        #expect(abs(topInterval - 0.25) < 0.0001)
+        #expect(abs(bottomInterval - 0.058) < 0.0001)
+    }
 }

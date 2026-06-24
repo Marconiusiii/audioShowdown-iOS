@@ -1,13 +1,8 @@
 import SwiftUI
 
 struct SettingsView: View {
-    private enum PickerFocus: Hashable {
-        case puckSize, pitchBehavior, pingRate, theme
-    }
-
     @ObservedObject var settings: GameSettings
     @Environment(\.dismiss) private var dismiss
-    @AccessibilityFocusState private var focusedPicker: PickerFocus?
     @State private var previewAudio = GameAudioEngine()
     @State private var previewHaptics = GameHapticsEngine()
 
@@ -54,15 +49,12 @@ struct SettingsView: View {
                             step: 1,
                             theme: theme
                         )
-                        AppMenuPickerRow(
+                        AppCategoricalSliderRow(
                             title: "Puck Size",
-                            valueText: puckSizes[settings.puckSize],
-                            selection: refocusingBinding($settings.puckSize, focus: .puckSize),
+                            choices: puckSizes,
+                            selection: $settings.puckSize,
                             theme: theme
-                        ) {
-                            indexedOptions(puckSizes)
-                        }
-                        .accessibilityFocused($focusedPicker, equals: .puckSize)
+                        )
 
                         AppSectionHeading(title: "Haptics", theme: theme)
                         VStack(spacing: 0) {
@@ -102,25 +94,20 @@ struct SettingsView: View {
                             theme: theme,
                             selectionChanged: previewPuckSound
                         )
-                        AppMenuPickerRow(
+                        AppCategoricalSliderRow(
                             title: "Pitch Behavior",
-                            valueText: pitchNames[settings.pitchBehavior],
-                            selection: refocusingBinding($settings.pitchBehavior, focus: .pitchBehavior),
-                            theme: theme
-                        ) {
-                            indexedOptions(pitchNames)
-                        }
-                        .accessibilityFocused($focusedPicker, equals: .pitchBehavior)
+                            choices: pitchNames,
+                            selection: $settings.pitchBehavior,
+                            theme: theme,
+                            selectionChanged: { _ in previewPuckSound(settings.puckSound) }
+                        )
                         AppToggleRow(title: "Lower Pitch When Closer", isOn: $settings.lowerPitchWhenCloser, theme: theme)
-                        AppMenuPickerRow(
+                        AppCategoricalSliderRow(
                             title: "Ping Rate",
-                            valueText: pingNames[settings.pingRate],
-                            selection: refocusingBinding($settings.pingRate, focus: .pingRate),
+                            choices: pingNames,
+                            selection: $settings.pingRate,
                             theme: theme
-                        ) {
-                            indexedOptions(pingNames)
-                        }
-                        .accessibilityFocused($focusedPicker, equals: .pingRate)
+                        )
                         AppToggleRow(title: "Center Crossing Sound", isOn: $settings.centerCrossingSound, theme: theme)
                         AppAdjustableSliderRow(
                             title: "Center Crossing Volume",
@@ -149,17 +136,12 @@ struct SettingsView: View {
                         )
 
                         AppSectionHeading(title: "Display", theme: theme)
-                        AppMenuPickerRow(
+                        AppCategoricalSliderRow(
                             title: "Color Theme",
-                            valueText: GameTheme.all[settings.themeIndex].name,
-                            selection: refocusingBinding($settings.themeIndex, focus: .theme),
+                            choices: GameTheme.all.map(\.name),
+                            selection: $settings.themeIndex,
                             theme: theme
-                        ) {
-                            ForEach(Array(GameTheme.all.enumerated()), id: \.offset) { index, option in
-                                Text(option.name).tag(index)
-                            }
-                        }
-                        .accessibilityFocused($focusedPicker, equals: .theme)
+                        )
 
                         AboutAudioShowdownView(theme: theme)
                     }
@@ -180,25 +162,6 @@ struct SettingsView: View {
         .onAppear {
             previewAudio.prepare(volume: settings.volume)
         }
-    }
-
-    @ViewBuilder private func indexedOptions(_ values: [String]) -> some View {
-        ForEach(Array(values.enumerated()), id: \.offset) { index, name in
-            Text(name).tag(index)
-        }
-    }
-
-    private func refocusingBinding<Value>(_ binding: Binding<Value>, focus: PickerFocus) -> Binding<Value> {
-        Binding(
-            get: { binding.wrappedValue },
-            set: { newValue in
-                binding.wrappedValue = newValue
-                focusedPicker = nil
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    focusedPicker = focus
-                }
-            }
-        )
     }
 
     private func previewPuckSound(_ index: Int) {

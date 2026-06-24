@@ -193,45 +193,6 @@ struct AppCategoricalSliderRow: View {
     }
 }
 
-struct AppMenuPickerRow<Selection: Hashable, Content: View>: View {
-    let title: String
-    let valueText: String
-    @Binding var selection: Selection
-    let theme: GameTheme
-    @ViewBuilder let content: () -> Content
-
-    var body: some View {
-        Picker(selection: $selection) {
-            content()
-        } label: {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.body.weight(.semibold))
-                    Text(valueText)
-                        .font(.body)
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.up.chevron.down")
-                    .accessibilityHidden(true)
-            }
-            .foregroundStyle(theme.line)
-            .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-        }
-        .pickerStyle(.menu)
-        .tint(theme.accent)
-        .frame(maxWidth: .infinity)
-        .background(theme.background)
-        .contentShape(Rectangle())
-        .accessibilityLabel(title)
-        .accessibilityValue(valueText)
-    }
-}
-
 struct AppLinkRow: View {
     let title: String
     let destination: URL
