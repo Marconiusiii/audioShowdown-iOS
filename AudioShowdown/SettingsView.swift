@@ -2,15 +2,15 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var settings: GameSettings
+    let audioEngine: GameAudioEngine
     @Environment(\.dismiss) private var dismiss
-    @State private var previewAudio = GameAudioEngine()
     @State private var previewHaptics = GameHapticsEngine()
 
     private let puckSounds = ["Woodblock", "Marimba", "Tick", "Sine beep", "Square beep", "Pluck", "Cowbell", "Clave", "Water drop", "Sonar ping", "Piano", "Chime", "Glass", "Tom", "Laser"]
     private let pitchNames = ["Pitch off", "Subtle", "Strong"]
     private let pulseSpeeds = ["Slow", "Medium", "Fast"]
     private let puckSizes = ["Classic", "Big", "Gigantic"]
-    private let movementSounds = ["Off", "Hum", "Tick", "Pad", "Wood", "Thud", "Brush", "Pluck", "Bell", "Square"]
+    private let movementSounds = ["Off", "Wood", "Rubber", "Iron", "Gold", "Stone", "Plastic"]
     private let strikeSounds = ["Thock", "Click", "Pop", "Knock", "Snare", "Wood", "Bonk", "Zap", "Boing", "Slap"]
     private let reverbStyles = ["Off", "Small Room", "Arcade Floor", "Showdown Tournament"]
 
@@ -84,7 +84,7 @@ struct SettingsView: View {
                             range: 0...1,
                             step: 0.05,
                             theme: theme,
-                            valueChanged: { previewAudio.setVolume($0) }
+                            valueChanged: { audioEngine.setVolume($0) }
                         )
                         AppCategoricalSliderRow(
                             title: "Reverb",
@@ -103,7 +103,7 @@ struct SettingsView: View {
                             step: 0.05,
                             theme: theme,
                             valueChanged: { value in
-                                previewAudio.setPuckVolume(value)
+                                audioEngine.setPuckVolume(value)
                                 previewPuckSound(settings.puckSound)
                             }
                         )
@@ -141,12 +141,12 @@ struct SettingsView: View {
                             range: 0...1,
                             step: 0.05,
                             theme: theme,
-                            valueChanged: { previewAudio.centerCrossing(volume: $0) }
+                            valueChanged: { audioEngine.centerCrossing(volume: $0) }
                         )
 
                         AppSectionHeading(title: "Mallet Audio", theme: theme)
                         AppCategoricalSliderRow(
-                            title: "Movement Sound",
+                            title: "Mallet Material",
                             choices: movementSounds,
                             selection: $settings.movementSound,
                             theme: theme,
@@ -185,14 +185,12 @@ struct SettingsView: View {
             .toolbarBackground(.visible, for: .navigationBar)
         }
         .onAppear {
-            previewAudio.prepare(volume: settings.volume)
-            previewAudio.setReverb(settings.reverbStyle)
-            previewAudio.setPuckVolume(settings.puckVolume)
+            audioEngine.warmUp(volume: settings.volume, reverbStyle: settings.reverbStyle, puckVolume: settings.puckVolume)
         }
     }
 
     private func previewPuckSound(_ index: Int) {
-        previewAudio.puckPing(
+        audioEngine.puckPing(
             x: 0.5,
             distance: 0.4,
             style: index,
@@ -203,15 +201,18 @@ struct SettingsView: View {
 
     private func previewMovementSound(_ index: Int) {
         guard index > 0 else { return }
-        previewAudio.malletMovement(style: index, x: 0.5)
+        audioEngine.updateMalletSlide(style: index, x: 0.5, speed: 700)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+            audioEngine.stopMalletSlide()
+        }
     }
 
     private func previewStrikeSound(_ index: Int) {
-        previewAudio.strike(style: index, x: 0.5)
+        audioEngine.strike(style: index, x: 0.5)
     }
 
     private func previewReverb(_ index: Int) {
-        previewAudio.setReverb(index)
+        audioEngine.setReverb(index)
         previewPuckSound(settings.puckSound)
     }
 }

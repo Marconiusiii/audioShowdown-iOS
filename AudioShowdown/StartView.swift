@@ -2,6 +2,7 @@ import SwiftUI
 
 struct StartView: View {
     @ObservedObject var settings: GameSettings
+    let audioEngine: GameAudioEngine
     let startGame: () -> Void
     let startTraining: () -> Void
     @State private var showingHowToPlay = false
@@ -41,6 +42,6 @@ struct StartView: View {
         }
         .background(theme.background.ignoresSafeArea())
         .sheet(isPresented: $showingHowToPlay) { HowToPlayView(theme: theme) }
-        .sheet(isPresented: $showingSettings) { SettingsView(settings: settings) }
+        .sheet(isPresented: $showingSettings) { SettingsView(settings: settings, audioEngine: audioEngine) }
     }
 }

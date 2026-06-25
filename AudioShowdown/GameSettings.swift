@@ -55,7 +55,7 @@ final class GameSettings: ObservableObject {
         puckVolume = Self.clamp(defaults.object(forKey: "puckVolume") as? Double ?? 0.8, 0...1)
         centerCrossingSound = defaults.object(forKey: "centerSound") as? Bool ?? true
         centerCrossingVolume = Self.clamp(defaults.object(forKey: "centerVolume") as? Double ?? 0.5, 0...1)
-        movementSound = Self.clamp(defaults.object(forKey: "movementSound") as? Int ?? 1, 0...9)
+        movementSound = Self.clamp(defaults.object(forKey: "movementSound") as? Int ?? 1, 0...6)
         strikeSound = Self.clamp(defaults.object(forKey: "strikeSound") as? Int ?? 0, 0...9)
         themeIndex = Self.clamp(defaults.object(forKey: "theme") as? Int ?? 0, 0...8)
         volume = Self.clamp(defaults.object(forKey: "volume") as? Double ?? 0.8, 0...1)

@@ -112,7 +112,7 @@ struct AudioShowdownTests {
         let suiteName = "AudioShowdownTests.PlacedServe.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        let model = GameModel(settings: GameSettings(defaults: defaults), training: false)
+        let model = GameModel(settings: GameSettings(defaults: defaults), training: false, audio: GameAudioEngine())
 
         model.touchBegan(at: CGPoint(x: 300, y: 900))
         model.touchEnded(wasTap: true)

@@ -13,7 +13,7 @@ final class GameModel: ObservableObject {
     static let center = 600.0
     static let goalHalfWidth = 150.0
     let settings: GameSettings
-    let audio = GameAudioEngine()
+    let audio: GameAudioEngine
     let haptics = GameHapticsEngine()
 
     @Published var puck = Disc(x: 300, y: 600)
@@ -28,7 +28,6 @@ final class GameModel: ObservableObject {
     private var previousTime: TimeInterval?
     private var previousPlayerPosition = Disc(x: 300, y: 1020)
     private var nextPingTime: TimeInterval = 0
-    private var lastMovementSound: TimeInterval = 0
     private var lastCenterSide = 0
     private var tapCount = 0
     private var lastTapTime: TimeInterval = 0
@@ -117,13 +116,12 @@ final class GameModel: ObservableObject {
         return words.indices.contains(number - 1) ? words[number - 1] : "\(number)th"
     }
 
-    init(settings: GameSettings, training: Bool) {
+    init(settings: GameSettings, training: Bool, audio: GameAudioEngine) {
         self.settings = settings
         self.training = training
+        self.audio = audio
         phase = training ? .training : .waitingForServe
-        audio.prepare(volume: settings.volume)
-        audio.setReverb(settings.reverbStyle)
-        audio.setPuckVolume(settings.puckVolume)
+        audio.warmUp(volume: settings.volume, reverbStyle: settings.reverbStyle, puckVolume: settings.puckVolume)
     }
 
     func announceInitialState() {
@@ -198,6 +196,7 @@ final class GameModel: ObservableObject {
     }
 
     func touchEnded(wasTap: Bool) {
+        audio.stopMalletSlide()
         let wasPlacingPuck = placingPuck
         placingPuck = false
         guard wasTap, !wasPlacingPuck else { return }
@@ -220,6 +219,7 @@ final class GameModel: ObservableObject {
 
     func togglePause() {
         guard phase == .live || phase == .paused else { return }
+        audio.stopMalletSlide()
         phase = phase == .paused ? .live : .paused
         previousTime = nil
         announce(phase == .paused ? "Game paused. Settings are available." : "Game resumed.")
@@ -249,10 +249,11 @@ final class GameModel: ObservableObject {
         } else if phase == .live {
             resolvePlayerDirectContact()
         }
-        let now = Date.timeIntervalSinceReferenceDate
-        if settings.movementSound > 0, now - lastMovementSound > 0.065, hypot(dx, dy) > 2 {
-            audio.malletMovement(style: settings.movementSound, x: next.x / Self.width)
-            lastMovementSound = now
+        let movementSpeed = hypot(playerMallet.vx, playerMallet.vy)
+        if settings.movementSound > 0, movementSpeed > 60 {
+            audio.updateMalletSlide(style: settings.movementSound, x: next.x / Self.width, speed: movementSpeed)
+        } else {
+            audio.stopMalletSlide()
         }
     }
 

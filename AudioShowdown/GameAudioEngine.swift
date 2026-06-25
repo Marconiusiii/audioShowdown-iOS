@@ -32,6 +32,7 @@ final class GameAudioEngine {
     private let wetEnvironment = AVAudioEnvironmentNode()
     private let wetMixer = AVAudioMixerNode()
     private let sourceFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
+    private let malletSlideVoice = SpatialVoice()
     private var puckVoices: [SpatialVoice] = []
     private var effectVoices: [SpatialVoice] = []
     private var nextPuckVoice = 0
@@ -39,6 +40,8 @@ final class GameAudioEngine {
     private var started = false
     private var reverbStyle = -1
     private var puckVolume = 0.8
+    private var warmedUp = false
+    private var malletSlideStyle = -1
     private var lastWinMotifIndex = -1
     private var lastLossMotifIndex = -1
 
@@ -54,6 +57,7 @@ final class GameAudioEngine {
         dryEnvironment.reverbParameters.enable = false
         wetEnvironment.reverbParameters.enable = true
         wetMixer.outputVolume = 0
+        configure(voice: malletSlideVoice)
         puckVoices = makeVoices(count: 10)
         effectVoices = makeVoices(count: 16)
     }
@@ -65,7 +69,9 @@ final class GameAudioEngine {
                 let session = AVAudioSession.sharedInstance()
                 try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
                 try session.setPreferredSampleRate(sourceFormat.sampleRate)
-                try session.setPreferredIOBufferDuration(0.005)
+                // A 5 ms buffer is too aggressive when debugging tethered from Xcode and can starve VoiceOver speech.
+                // 12 ms keeps gameplay responsive while leaving enough audio scheduling room for assistive audio.
+                try session.setPreferredIOBufferDuration(0.012)
                 try session.setActive(true)
                 engine.prepare()
             }
@@ -74,6 +80,16 @@ final class GameAudioEngine {
         } catch {
             started = false
         }
+    }
+
+    func warmUp(volume: Double, reverbStyle: Int, puckVolume: Double) {
+        prepare(volume: volume)
+        setReverb(reverbStyle)
+        setPuckVolume(puckVolume)
+        guard !warmedUp else { return }
+        warmedUp = true
+        let silence = render(tones: [], noises: [], gain: 0)
+        playEffect(silence, x: 0.5, proximity: 0.5)
     }
 
     func setVolume(_ volume: Double) {
@@ -225,22 +241,41 @@ final class GameAudioEngine {
         playEffect(render(tones: tones, noises: noises, gain: baseGain), x: x, proximity: byPlayer ? 0.9 : 0.15)
     }
 
-    func malletMovement(style: Int, x: Double) {
-        guard style > 0 else { return }
-        let tone: Tone?
-        let noise: Noise?
-        switch style {
-        case 1: tone = Tone(waveform: .sine, startFrequency: 150, endFrequency: nil, duration: 0.05, peak: 0.22); noise = nil
-        case 2: tone = nil; noise = Noise(duration: 0.02, peak: 0.3, highPass: 1_500)
-        case 3: tone = Tone(waveform: .sine, startFrequency: 220, endFrequency: nil, duration: 0.12, peak: 0.18); noise = nil
-        case 4: tone = Tone(waveform: .triangle, startFrequency: 300, endFrequency: 240, duration: 0.04, peak: 0.25); noise = nil
-        case 5: tone = Tone(waveform: .sine, startFrequency: 110, endFrequency: nil, duration: 0.08, peak: 0.3); noise = nil
-        case 6: tone = nil; noise = Noise(duration: 0.025, peak: 0.25, highPass: 4_000)
-        case 7: tone = Tone(waveform: .triangle, startFrequency: 260, endFrequency: nil, duration: 0.07, peak: 0.25); noise = nil
-        case 8: tone = Tone(waveform: .sine, startFrequency: 600, endFrequency: nil, duration: 0.1, peak: 0.2); noise = nil
-        default: tone = Tone(waveform: .square, startFrequency: 170, endFrequency: nil, duration: 0.05, peak: 0.18); noise = nil
+    func updateMalletSlide(style: Int, x: Double, speed: Double) {
+        guard style > 0, speed > 0 else {
+            stopMalletSlide()
+            return
         }
-        playEffect(render(tones: tone.map { [$0] } ?? [], noises: noise.map { [$0] } ?? [], gain: 0.35), x: x, proximity: 0.95)
+        if !engine.isRunning { try? engine.start() }
+        let gain = Float(0.035 + 0.40 * clamp(speed / 1_400))
+        let position = spatialPosition(x: x, proximity: 0.95)
+        if style != malletSlideStyle || !malletSlideVoice.dryPlayer.isPlaying {
+            malletSlideStyle = style
+            let buffer = renderMalletSlideLoop(style: style)
+            malletSlideVoice.dryPlayer.stop()
+            malletSlideVoice.dryPlayer.scheduleBuffer(buffer, at: nil, options: .loops)
+            malletSlideVoice.dryPlayer.play()
+            malletSlideVoice.wetPlayer.stop()
+            malletSlideVoice.wetPlayer.scheduleBuffer(buffer, at: nil, options: .loops)
+            if reverbStyle > 0 { malletSlideVoice.wetPlayer.play() }
+        } else if reverbStyle > 0, !malletSlideVoice.wetPlayer.isPlaying {
+            let buffer = renderMalletSlideLoop(style: style)
+            malletSlideVoice.wetPlayer.scheduleBuffer(buffer, at: nil, options: .loops)
+            malletSlideVoice.wetPlayer.play()
+        } else if reverbStyle == 0, malletSlideVoice.wetPlayer.isPlaying {
+            malletSlideVoice.wetPlayer.stop()
+        }
+        malletSlideVoice.dryPlayer.position = position
+        malletSlideVoice.wetPlayer.position = position
+        malletSlideVoice.dryPlayer.volume = gain
+        malletSlideVoice.wetPlayer.volume = gain
+    }
+
+    func stopMalletSlide() {
+        malletSlideVoice.dryPlayer.volume = 0
+        malletSlideVoice.wetPlayer.volume = 0
+        if malletSlideVoice.dryPlayer.isPlaying { malletSlideVoice.dryPlayer.stop() }
+        if malletSlideVoice.wetPlayer.isPlaying { malletSlideVoice.wetPlayer.stop() }
     }
 
     func ricochet(x: Double, speed: Double) {
@@ -344,16 +379,20 @@ final class GameAudioEngine {
     private func makeVoices(count: Int) -> [SpatialVoice] {
         (0..<count).map { _ in
             let voice = SpatialVoice()
-            engine.attach(voice.dryPlayer)
-            engine.attach(voice.wetPlayer)
-            engine.connect(voice.dryPlayer, to: dryEnvironment, format: sourceFormat)
-            engine.connect(voice.wetPlayer, to: wetEnvironment, format: sourceFormat)
-            voice.dryPlayer.renderingAlgorithm = .HRTFHQ
-            voice.dryPlayer.reverbBlend = 0
-            voice.wetPlayer.renderingAlgorithm = .HRTFHQ
-            voice.wetPlayer.reverbBlend = 100
+            configure(voice: voice)
             return voice
         }
+    }
+
+    private func configure(voice: SpatialVoice) {
+        engine.attach(voice.dryPlayer)
+        engine.attach(voice.wetPlayer)
+        engine.connect(voice.dryPlayer, to: dryEnvironment, format: sourceFormat)
+        engine.connect(voice.wetPlayer, to: wetEnvironment, format: sourceFormat)
+        voice.dryPlayer.renderingAlgorithm = .HRTFHQ
+        voice.dryPlayer.reverbBlend = 0
+        voice.wetPlayer.renderingAlgorithm = .HRTFHQ
+        voice.wetPlayer.reverbBlend = 100
     }
 
     private func playPuck(_ buffer: AVAudioPCMBuffer, x: Double, proximity: Double) {
@@ -399,6 +438,70 @@ final class GameAudioEngine {
         let horizontal = Float((clamp(x) - 0.5) * 4.8)
         let depth = Float(-(0.5 + (1 - clamp(proximity)) * 5.0))
         return AVAudio3DPoint(x: horizontal, y: 0, z: depth)
+    }
+
+    private func renderMalletSlideLoop(style: Int) -> AVAudioPCMBuffer {
+        let duration = 2.0
+        let frameCount = Int(duration * sourceFormat.sampleRate)
+        let buffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(frameCount))!
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        let samples = buffer.floatChannelData![0]
+        let sampleRate = sourceFormat.sampleRate
+        var lowState = 0.0
+        var midState = 0.0
+        var highState = 0.0
+        var previousInput = 0.0
+
+        func lowPass(_ value: Double, cutoff: Double, state: inout Double) -> Double {
+            let alpha = 1 - exp(-2 * Double.pi * cutoff / sampleRate)
+            state += alpha * (value - state)
+            return state
+        }
+
+        func highPass(_ value: Double, cutoff: Double, state: inout Double) -> Double {
+            let alpha = exp(-2 * Double.pi * cutoff / sampleRate)
+            state = alpha * (state + value - previousInput)
+            previousInput = value
+            return state
+        }
+
+        for frame in 0..<frameCount {
+            let t = Double(frame) / sampleRate
+            let noise = Double.random(in: -1...1)
+            let value: Double
+            switch style {
+            case 1: // Wood
+                let grain = lowPass(noise, cutoff: 1_400, state: &lowState)
+                value = grain * 0.38 + sin(2 * Double.pi * 120 * t) * 0.055 + sin(2 * Double.pi * 240 * t) * 0.025
+            case 2: // Rubber
+                let drag = lowPass(noise, cutoff: 420, state: &lowState)
+                value = drag * 0.46 + sin(2 * Double.pi * 78 * t) * 0.08
+            case 3: // Iron
+                let scrape = highPass(noise, cutoff: 1_900, state: &highState)
+                value = scrape * 0.18 + sin(2 * Double.pi * 620 * t) * 0.05 + sin(2 * Double.pi * 1_260 * t) * 0.025
+            case 4: // Gold
+                let polish = highPass(lowPass(noise, cutoff: 4_600, state: &lowState), cutoff: 900, state: &highState)
+                value = polish * 0.13 + sin(2 * Double.pi * 880 * t) * 0.045 + sin(2 * Double.pi * 1_760 * t) * 0.018
+            case 5: // Stone
+                let rough = lowPass(noise, cutoff: 950, state: &lowState)
+                let grit = highPass(noise, cutoff: 240, state: &midState)
+                value = rough * 0.32 + grit * 0.12 + sin(2 * Double.pi * 96 * t) * 0.045
+            default: // Plastic
+                let squeak = highPass(lowPass(noise, cutoff: 3_200, state: &lowState), cutoff: 700, state: &highState)
+                value = squeak * 0.16 + sin(2 * Double.pi * 330 * t) * 0.035 + waveformSample(phase: 2 * Double.pi * 165 * t, waveform: .triangle) * 0.025
+            }
+            let edgeFrames = Int(0.025 * sampleRate)
+            let edgeGain: Double
+            if frame < edgeFrames {
+                edgeGain = Double(frame) / Double(edgeFrames)
+            } else if frame > frameCount - edgeFrames {
+                edgeGain = Double(frameCount - frame) / Double(edgeFrames)
+            } else {
+                edgeGain = 1
+            }
+            samples[frame] = Float(tanh(value * edgeGain))
+        }
+        return buffer
     }
 
     private func render(tones: [Tone], noises: [Noise], gain: Double, lowPass: Double? = nil) -> AVAudioPCMBuffer {
