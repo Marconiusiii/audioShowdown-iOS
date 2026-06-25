@@ -7,12 +7,12 @@ struct AppSectionHeading: View {
     var body: some View {
         Text(title)
             .font(.headline)
-            .foregroundStyle(theme.line)
+            .foregroundStyle(theme.accent)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
             .padding(.horizontal, 20)
             .padding(.vertical, 8)
-            .background(theme.table)
+            .background(theme.surface)
             .contentShape(Rectangle())
             .accessibilityAddTraits(.isHeader)
     }
@@ -26,7 +26,7 @@ struct AppTextRow: View {
     var body: some View {
         Text(text)
             .font(.body)
-            .foregroundStyle(theme.line)
+            .foregroundStyle(theme.foreground)
             .multilineTextAlignment(alignment)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, minHeight: 52, alignment: alignment == .center ? .center : .leading)
@@ -55,7 +55,7 @@ struct AppButtonRow: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(prominent ? theme.background : theme.accent)
-        .background(prominent ? theme.accent : theme.background)
+        .background(prominent ? theme.accent : theme.surface)
         .contentShape(Rectangle())
     }
 }
@@ -68,7 +68,7 @@ struct AppToggleRow: View {
     var body: some View {
         Toggle(title, isOn: $isOn)
             .font(.body)
-            .foregroundStyle(theme.line)
+            .foregroundStyle(theme.foreground)
             .tint(theme.accent)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, minHeight: 56)
@@ -98,7 +98,7 @@ struct AppAdjustableSliderRow: View {
                     .font(.body.monospacedDigit())
                     .multilineTextAlignment(.trailing)
             }
-            .foregroundStyle(theme.line)
+            .foregroundStyle(theme.foreground)
             .fixedSize(horizontal: false, vertical: true)
 
             Slider(value: visualBinding, in: range, step: step)
@@ -152,7 +152,7 @@ struct AppCategoricalSliderRow: View {
                     .font(.body)
                     .multilineTextAlignment(.trailing)
             }
-            .foregroundStyle(theme.line)
+            .foregroundStyle(theme.foreground)
             .fixedSize(horizontal: false, vertical: true)
 
             Slider(value: sliderBinding, in: 0...Double(max(0, choices.count - 1)), step: 1)
@@ -210,7 +210,7 @@ struct AppLinkRow: View {
                 .contentShape(Rectangle())
         }
         .foregroundStyle(theme.accent)
-        .background(theme.background)
+        .background(theme.surface)
         .contentShape(Rectangle())
     }
 }

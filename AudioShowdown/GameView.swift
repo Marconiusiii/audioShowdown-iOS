@@ -19,19 +19,19 @@ struct GameView: View {
         VStack(spacing: 0) {
             Text(training ? "Where the Fuck is the Puck?" : "Audio Showdown")
                 .font(.headline)
-                .foregroundStyle(theme.line)
+                .foregroundStyle(theme.foreground)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, minHeight: 52)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(theme.table)
+                .background(theme.surface)
                 .contentShape(Rectangle())
                 .accessibilityAddTraits(.isHeader)
 
             if !training {
                 Text("\(model.playerScore)–\(model.opponentScore)")
                     .font(.headline.monospacedDigit())
-                    .foregroundStyle(theme.line)
+                    .foregroundStyle(theme.foreground)
                     .frame(maxWidth: .infinity, minHeight: 56)
                     .background(theme.background)
                     .contentShape(Rectangle())
@@ -42,12 +42,12 @@ struct GameView: View {
                 VStack(spacing: 0) {
                     Text("Game Paused")
                         .font(.title2.weight(.black))
-                        .foregroundStyle(theme.line)
+                        .foregroundStyle(theme.foreground)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, minHeight: 72)
                         .padding(.horizontal, 20)
                         .padding(.vertical, 8)
-                        .background(theme.table)
+                        .background(theme.surface)
                         .contentShape(Rectangle())
                         .accessibilityAddTraits(.isHeader)
 

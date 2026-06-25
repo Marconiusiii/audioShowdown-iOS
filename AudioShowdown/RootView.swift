@@ -20,6 +20,6 @@ struct RootView: View {
                 GameView(settings: settings, training: true) { destination = .home }
             }
         }
-        .preferredColorScheme(settings.themeIndex == 1 ? .light : .dark)
+        .preferredColorScheme(GameTheme.all[settings.themeIndex].isLight ? .light : .dark)
     }
 }

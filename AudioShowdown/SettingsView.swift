@@ -23,12 +23,12 @@ struct SettingsView: View {
                     VStack(spacing: 0) {
                         Text("Settings")
                             .font(.title2.weight(.black))
-                            .foregroundStyle(theme.line)
+                            .foregroundStyle(theme.foreground)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, minHeight: 72)
                             .padding(.horizontal, 20)
                             .padding(.vertical, 8)
-                            .background(theme.table)
+                            .background(theme.surface)
                             .contentShape(Rectangle())
                             .accessibilityAddTraits(.isHeader)
 
@@ -181,7 +181,7 @@ struct SettingsView: View {
                         .foregroundStyle(theme.accent)
                 }
             }
-            .toolbarBackground(theme.table, for: .navigationBar)
+            .toolbarBackground(theme.surface, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
         }
         .onAppear {
