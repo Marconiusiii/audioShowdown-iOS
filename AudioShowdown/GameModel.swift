@@ -4,7 +4,7 @@ import Combine
 
 @MainActor
 final class GameModel: ObservableObject {
-    enum Phase { case waitingForServe, live, paused, gameOver, training }
+    enum Phase { case waitingForServe, placedServe, live, paused, gameOver, training }
     enum Server { case player, opponent }
     struct Disc { var x: Double; var y: Double; var vx: Double = 0; var vy: Double = 0 }
 
@@ -95,6 +95,15 @@ final class GameModel: ObservableObject {
         return (min(max(vx, -maximumVx), maximumVx), direction * targetVy)
     }
 
+    static func playableContactVelocity(vx: Double, vy: Double, byPlayer: Bool, minimumSpeed: Double = 520) -> (vx: Double, vy: Double) {
+        let direction = byPlayer ? -1.0 : 1.0
+        let speed = max(minimumSpeed, hypot(vx, vy))
+        let minimumVerticalSpeed = max(280, speed * 0.55)
+        let shapedVy = vy * direction < minimumVerticalSpeed ? direction * minimumVerticalSpeed : vy
+        let maximumVx = sqrt(max(0, speed * speed - shapedVy * shapedVy))
+        return (min(max(vx, -maximumVx), maximumVx), shapedVy)
+    }
+
     static func serveAnnouncement(server: Server, serveNumber: Int, playerScore: Int, computerScore: Int) -> String {
         let ordinal = ordinalWord(serveNumber)
         if server == .player {
@@ -133,7 +142,7 @@ final class GameModel: ObservableObject {
         guard let previousTime else { self.previousTime = now; return }
         self.previousTime = now
         guard phase == .live else {
-            if phase == .training { updatePuckAudio(now: now) }
+            if phase == .training || phase == .placedServe { updatePuckAudio(now: now) }
             return
         }
         let timeScale = 0.45 * pow(2.6 / 0.45, (settings.gameSpeed - 1) / 9)
@@ -160,19 +169,22 @@ final class GameModel: ObservableObject {
             puck.x = point.x; puck.y = point.y
             return
         }
-        guard phase == .waitingForServe || phase == .live else { return }
+        guard phase == .waitingForServe || phase == .placedServe || phase == .live else { return }
         if phase == .waitingForServe {
             if server == .player {
                 puck = Disc(x: clamp(point.x, puckRadius, Self.width - puckRadius), y: clamp(point.y, Self.center + puckRadius, Self.height - puckRadius))
                 placingPuck = true
                 resetPuckRecoveryState()
-                phase = .live
+                phase = .placedServe
                 haptics.play(.serve, level: settings.haptics)
             } else {
                 opponentServe()
             }
         }
         movePlayer(to: point, allowStrike: false)
+        if phase == .live {
+            resolvePlayerDirectContact()
+        }
     }
 
     func touchMoved(to point: CGPoint) {
@@ -181,7 +193,7 @@ final class GameModel: ObservableObject {
             puck.y = clamp(point.y, puckRadius, Self.height - puckRadius)
             return
         }
-        guard phase == .live else { return }
+        guard phase == .live || phase == .placedServe else { return }
         movePlayer(to: point)
     }
 
@@ -231,8 +243,11 @@ final class GameModel: ObservableObject {
         playerMallet.vx = dx * 28; playerMallet.vy = dy * 28
         playerMallet.x = next.x; playerMallet.y = next.y
         previousPlayerPosition = next
-        if allowStrike, phase == .live, sweptPlayerStrike(from: previous, to: next) {
+        if allowStrike, phase == .placedServe || phase == .live, sweptPlayerStrike(from: previous, to: next) {
             placingPuck = false
+            phase = .live
+        } else if phase == .live {
+            resolvePlayerDirectContact()
         }
         let now = Date.timeIntervalSinceReferenceDate
         if settings.movementSound > 0, now - lastMovementSound > 0.065, hypot(dx, dy) > 2 {
@@ -244,13 +259,20 @@ final class GameModel: ObservableObject {
     private func moveOpponent(dt: Double) {
         let t = (settings.opponentSkill - 1) / 9
         let maxSpeed = 380 + 670 * t
-        let targetX = phase == .live && puck.y < Self.center ? puck.x : 300
-        let targetY = phase == .live && puck.y < Self.center ? max(90, puck.y - 80) : 180
+        let puckSpeed = hypot(puck.vx, puck.vy)
+        let slowNearOpponentGoal = puck.y < 150 && puckSpeed < 420
+        let targetX = phase == .live && puck.y < Self.center && !slowNearOpponentGoal ? puck.x : 300.0
+        let targetY: Double
+        if phase == .live && puck.y < Self.center {
+            targetY = slowNearOpponentGoal ? 210.0 : max(90.0, puck.y - 80)
+        } else {
+            targetY = 180.0
+        }
         let dx = targetX - opponentMallet.x, dy = targetY - opponentMallet.y
         let length = max(1, hypot(dx, dy)), distance = min(maxSpeed * dt, length)
         opponentMallet.vx = dx / length * maxSpeed; opponentMallet.vy = dy / length * maxSpeed
-        opponentMallet.x += dx / length * distance
-        opponentMallet.y += dy / length * distance
+        opponentMallet.x = clamp(opponentMallet.x + dx / length * distance, 44, Self.width - 44)
+        opponentMallet.y = clamp(opponentMallet.y + dy / length * distance, 44, Self.center - 44)
     }
 
     private func collideWithWalls() {
@@ -287,9 +309,37 @@ final class GameModel: ObservableObject {
         if -normalVelocity > 40 {
             shapeStrike(byPlayer: isPlayer)
         }
+        if isPlayer {
+            ensurePlayablePlayerContact()
+        } else {
+            ensurePlayableComputerContact()
+        }
         if -normalVelocity > 100 {
             playStrikeIfReady(byPlayer: isPlayer, speed: hypot(puck.vx, puck.vy))
         }
+    }
+
+    private func resolvePlayerDirectContact() {
+        let dx = puck.x - playerMallet.x
+        let dy = puck.y - playerMallet.y
+        let distance = hypot(dx, dy)
+        let minimum = puckRadius + 44
+        guard distance < minimum else { return }
+        let nx: Double
+        let ny: Double
+        if distance < 0.001 {
+            nx = 0
+            ny = -1
+        } else {
+            nx = dx / distance
+            ny = dy / distance
+        }
+        puck.x = clamp(playerMallet.x + nx * (minimum + 1), puckRadius, Self.width - puckRadius)
+        puck.y = clamp(playerMallet.y + ny * (minimum + 1), puckRadius, Self.height - puckRadius)
+        puck.vx = playerMallet.vx * 0.75 + nx * 160
+        puck.vy = playerMallet.vy * 0.75
+        ensurePlayablePlayerContact()
+        playStrikeIfReady(byPlayer: true, speed: hypot(puck.vx, puck.vy))
     }
 
     private func sweptPlayerStrike(from start: Disc, to end: Disc) -> Bool {
@@ -316,7 +366,7 @@ final class GameModel: ObservableObject {
         puck.y = clamp(closestY + ny * (minimum + 1), puckRadius, Self.height - puckRadius)
         puck.vx += playerMallet.vx * 0.9
         puck.vy += playerMallet.vy * 0.9
-        shapeStrike(byPlayer: true)
+        ensurePlayablePlayerContact()
         playStrikeIfReady(byPlayer: true, speed: hypot(puck.vx, puck.vy))
         return true
     }
@@ -326,6 +376,24 @@ final class GameModel: ObservableObject {
         puck.vx = shaped.vx
         puck.vy = shaped.vy
         lastHitByPlayer = byPlayer
+        progressY = puck.y
+        progressTime = Date.timeIntervalSinceReferenceDate
+    }
+
+    private func ensurePlayablePlayerContact() {
+        let playable = Self.playableContactVelocity(vx: puck.vx, vy: puck.vy, byPlayer: true)
+        puck.vx = playable.vx
+        puck.vy = playable.vy
+        lastHitByPlayer = true
+        progressY = puck.y
+        progressTime = Date.timeIntervalSinceReferenceDate
+    }
+
+    private func ensurePlayableComputerContact() {
+        let playable = Self.playableContactVelocity(vx: puck.vx, vy: puck.vy, byPlayer: false, minimumSpeed: 500)
+        puck.vx = playable.vx
+        puck.vy = playable.vy
+        lastHitByPlayer = false
         progressY = puck.y
         progressTime = Date.timeIntervalSinceReferenceDate
     }
@@ -353,8 +421,9 @@ final class GameModel: ObservableObject {
         let distance = hypot(dx, dy)
         let minimum = puckRadius + 44
         guard distance < minimum else { return false }
+        let isOpponent = mallet.y < Self.center
         var escapeX = Self.width / 2 - puck.x
-        var escapeY = Self.center - puck.y
+        var escapeY = isOpponent && puck.y < 140 ? 1 : Self.center - puck.y
         var escapeLength = hypot(escapeX, escapeY)
         if escapeLength < 1 {
             escapeX = puck.x < Self.width / 2 ? 1 : -1
@@ -371,9 +440,14 @@ final class GameModel: ObservableObject {
         escapeY /= escapeLength
         puck.x = clamp(puck.x + escapeX * (minimum - distance + 6), puckRadius, Self.width - puckRadius)
         puck.y = clamp(puck.y + escapeY * (minimum - distance + 6), puckRadius, Self.height - puckRadius)
-        let kick = max(hypot(puck.vx, puck.vy), 300)
+        let kick = max(hypot(puck.vx, puck.vy), isOpponent ? 420 : 360)
         puck.vx = escapeX * kick
         puck.vy = escapeY * kick
+        if isOpponent, puck.vy < 240 {
+            let recovered = Self.recoveredPuckVelocity(vx: puck.vx, vy: puck.vy, byPlayer: false)
+            puck.vx = recovered.vx
+            puck.vy = recovered.vy
+        }
         return true
     }
 
@@ -389,10 +463,11 @@ final class GameModel: ObservableObject {
             progressTime = now
             return
         }
-        let stalled = speed < 120
-        let tooLateral = abs(puck.vy) < 90
-        guard stalled || tooLateral else { return }
-        let delay = stalled ? 1.2 : 1.8
+        let stalled = speed < 180
+        let tooLateral = abs(puck.vy) < 120
+        let trappedNearGoal = (puck.y < 150 || puck.y > Self.height - 150) && speed < 320
+        guard stalled || tooLateral || trappedNearGoal else { return }
+        let delay = trappedNearGoal ? 0.45 : (stalled ? 0.75 : 1.1)
         guard now - progressTime >= delay else { return }
         let recoveryHitByPlayer = lastHitByPlayer ?? (puck.y >= Self.center)
         let recovered = Self.recoveredPuckVelocity(vx: puck.vx, vy: puck.vy, byPlayer: recoveryHitByPlayer)

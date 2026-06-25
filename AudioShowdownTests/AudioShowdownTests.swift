@@ -94,6 +94,34 @@ struct AudioShowdownTests {
         #expect(abs(recovered.vx) <= 80)
     }
 
+    @Test func slowPlayerContactStillCreatesPlayableUpwardBunt() {
+        let playable = GameModel.playableContactVelocity(vx: 20, vy: 15, byPlayer: true)
+
+        #expect(playable.vy <= -280)
+        #expect(hypot(playable.vx, playable.vy) >= 280)
+    }
+
+    @Test func slowComputerContactStillCreatesPlayableDownwardBunt() {
+        let playable = GameModel.playableContactVelocity(vx: -20, vy: -15, byPlayer: false)
+
+        #expect(playable.vy >= 280)
+        #expect(hypot(playable.vx, playable.vy) >= 280)
+    }
+
+    @Test func playerServeCanBePlacedWithoutImmediatelyGoingLive() {
+        let suiteName = "AudioShowdownTests.PlacedServe.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = GameModel(settings: GameSettings(defaults: defaults), training: false)
+
+        model.touchBegan(at: CGPoint(x: 300, y: 900))
+        model.touchEnded(wasTap: true)
+
+        #expect(model.phase == .placedServe)
+        #expect(model.puck.vx == 0)
+        #expect(model.puck.vy == 0)
+    }
+
     @Test func oldApproachPulseSettingMigratesToMediumWithSpeedup() {
         let suiteName = "AudioShowdownTests.PulseMigration.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
