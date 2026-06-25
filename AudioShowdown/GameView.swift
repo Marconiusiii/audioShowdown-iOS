@@ -55,8 +55,17 @@ struct GameView: View {
         })) {
             pauseModal(theme: theme)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .trainingFinished)) { _ in returnHome() }
-        .onReceive(NotificationCenter.default.publisher(for: .gameOverReturnHome)) { _ in returnHome() }
+        .onReceive(NotificationCenter.default.publisher(for: .trainingFinished)) { _ in
+            model.stopContinuousAudio()
+            returnHome()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .gameOverReturnHome)) { _ in
+            model.stopContinuousAudio()
+            returnHome()
+        }
+        .onDisappear {
+            model.stopContinuousAudio()
+        }
         .task {
             try? await Task.sleep(for: .milliseconds(450))
             model.announceInitialState()

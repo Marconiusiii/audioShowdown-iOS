@@ -39,6 +39,22 @@ final class GameAudioEngine {
         var rattleEnvelope = 0.0
         var rattleBodyEnvelope = 0.0
         var rattleResonancePhase = 0.0
+        var clicker1Countdown = 0.02
+        var clicker2Countdown = 0.08
+        var clicker3Countdown = 0.14
+        var clicker4Countdown = 0.21
+        var clicker5Countdown = 0.29
+        var clicker6Countdown = 0.36
+        var clicker7Countdown = 0.47
+        var clicker8Countdown = 0.55
+        var clicker1Envelope = 0.0
+        var clicker2Envelope = 0.0
+        var clicker3Envelope = 0.0
+        var clicker4Envelope = 0.0
+        var clicker5Envelope = 0.0
+        var clicker6Envelope = 0.0
+        var clicker7Envelope = 0.0
+        var clicker8Envelope = 0.0
     }
 
     private let engine = AVAudioEngine()
@@ -235,7 +251,7 @@ final class GameAudioEngine {
         let near = clamp(proximity)
         let distanceFactor = closerIncreases ? near : 1 - near
         smoothPuckRenderSpeed = speed
-        smoothPuckPitchMultiplier = distanceBehavior == .pitch ? 0.72 + 0.56 * distanceFactor : 1
+        smoothPuckPitchMultiplier = distanceBehavior == .pitch && style != 3 && style != 5 ? 0.82 + 0.36 * distanceFactor : 1
 
         if style != smoothPuckStyle || !smoothPuckVoice.dryPlayer.isPlaying {
             smoothPuckGeneration += 1
@@ -260,10 +276,9 @@ final class GameAudioEngine {
             smoothPuckVoice.wetPlayer.stop()
         }
         primeSmoothPuckQueue(generation: smoothPuckGeneration)
-        let baseGain = distanceBehavior == .volume ? 0.48 + 0.42 * distanceFactor : 0.68
-        let speedGain = 0.72 + 0.28 * clamp(speed / 1_800)
-        let gain = Float(baseGain * speedGain * clamp(volume))
-        let position = spatialPosition(x: x, proximity: near)
+        let baseGain = distanceBehavior == .volume ? 0.78 + 0.18 * distanceFactor : 0.84
+        let gain = Float(baseGain * clamp(volume))
+        let position = smoothTrackingPosition(x: x, proximity: near)
         smoothPuckVoice.dryPlayer.position = position
         smoothPuckVoice.wetPlayer.position = position
         smoothPuckVoice.dryPlayer.volume = gain
@@ -276,8 +291,8 @@ final class GameAudioEngine {
         if !engine.isRunning { try? engine.start() }
         let near = clamp(proximity)
         let distanceFactor = closerIncreases ? near : 1 - near
-        let pitchMultiplier = distanceBehavior == .pitch ? 0.72 + 0.56 * distanceFactor : 1
-        let previewRattleEnergy = style == 3 ? 0.85 : 0.12
+        let pitchMultiplier = distanceBehavior == .pitch && style != 3 && style != 5 ? 0.82 + 0.36 * distanceFactor : 1
+        let previewRattleEnergy = style == 3 ? 1.0 : 0.12
         var previewState = SmoothPuckRenderState()
         let buffer = renderSmoothPuckBuffer(
             style: style,
@@ -543,6 +558,12 @@ final class GameAudioEngine {
         return AVAudio3DPoint(x: horizontal, y: 0, z: depth)
     }
 
+    private func smoothTrackingPosition(x: Double, proximity: Double) -> AVAudio3DPoint {
+        let horizontal = Float((clamp(x) - 0.5) * 4.0)
+        let depth = Float(-(0.75 + (1 - clamp(proximity)) * 1.6))
+        return AVAudio3DPoint(x: horizontal, y: 0, z: depth)
+    }
+
     private func renderMalletSlideLoop(style: Int) -> AVAudioPCMBuffer {
         let duration = 2.0
         let frameCount = Int(duration * sourceFormat.sampleRate)
@@ -662,6 +683,15 @@ final class GameAudioEngine {
             return waveformSample(phase: phase, waveform: waveform)
         }
 
+        func triggerClicker(_ countdown: inout Double, _ envelope: inout Double, baseRange: ClosedRange<Double>, chaos: Double) {
+            countdown -= 1 / sampleRate
+            guard countdown <= 0 else { return }
+            let chaosCompression = 1 - 0.68 * chaos
+            let interval = Double.random(in: baseRange) * max(0.28, chaosCompression)
+            countdown = interval * Double.random(in: 0.62...1.28)
+            envelope += Double.random(in: 1.10...2.20) * (0.78 + chaos * 1.85)
+        }
+
         for frame in 0..<frameCount {
             let noise = Double.random(in: -1...1)
             let value: Double
@@ -685,39 +715,91 @@ final class GameAudioEngine {
                 let contact = lowPass(Double.random(in: -1...1), cutoff: 260 + 220 * speedFactor, state: &state.midState)
                 value = roll * 0.042 + wobble * 0.022 + body * 0.065 + contact * 0.020
             case 3: // Showdown Ball
-                let rollBody = lowPass(noise, cutoff: 95 + 250 * speedFactor, state: &state.lowState)
-                let tableTexture = lowPass(Double.random(in: -1...1), cutoff: 280 + 250 * speedFactor, state: &state.midState)
-                let ballTone = oscillator((68 + 38 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .triangle)
-                let eventRate = 1.4 + 7.0 * speedFactor + 8.0 * rattleEnergy
-                let burstChance = eventRate / sampleRate
-                if Double.random(in: 0...1) < burstChance {
-                    let eventStrength = Double.random(in: 0.018...0.075) * (0.22 + speedFactor * 0.42 + rattleEnergy * 0.45)
-                    state.rattleEnvelope += eventStrength
-                    state.rattleBodyEnvelope += eventStrength * Double.random(in: 0.22...0.50)
+                let chaos = clamp(rattleEnergy)
+                let movement = 0.35 + 0.65 * speedFactor
+                let shellBody = lowPass(noise, cutoff: 70 + 120 * speedFactor, state: &state.lowState)
+                let shellTone = oscillator(56 + 22 * speedFactor, phase: &state.primaryPhase, waveform: .triangle)
+                let rotation = oscillator(2.5 + 5.0 * speedFactor, phase: &state.secondaryPhase)
+
+                triggerClicker(&state.clicker1Countdown, &state.clicker1Envelope, baseRange: 0.08...0.24, chaos: chaos)
+                triggerClicker(&state.clicker2Countdown, &state.clicker2Envelope, baseRange: 0.11...0.30, chaos: chaos)
+                triggerClicker(&state.clicker3Countdown, &state.clicker3Envelope, baseRange: 0.15...0.38, chaos: chaos)
+                triggerClicker(&state.clicker4Countdown, &state.clicker4Envelope, baseRange: 0.19...0.48, chaos: chaos)
+                triggerClicker(&state.clicker5Countdown, &state.clicker5Envelope, baseRange: 0.24...0.58, chaos: chaos)
+                triggerClicker(&state.clicker6Countdown, &state.clicker6Envelope, baseRange: 0.30...0.70, chaos: chaos)
+                triggerClicker(&state.clicker7Countdown, &state.clicker7Envelope, baseRange: 0.38...0.84, chaos: chaos)
+                triggerClicker(&state.clicker8Countdown, &state.clicker8Envelope, baseRange: 0.48...1.05, chaos: chaos)
+
+                if Double.random(in: 0...1) < (0.50 + chaos * 9.0 + speedFactor * 2.4) / sampleRate {
+                    let burst = Double.random(in: 0.70...2.10) * (0.72 + chaos)
+                    switch Int.random(in: 0...7) {
+                    case 0: state.clicker1Envelope += burst
+                    case 1: state.clicker2Envelope += burst
+                    case 2: state.clicker3Envelope += burst
+                    case 3: state.clicker4Envelope += burst
+                    case 4: state.clicker5Envelope += burst
+                    case 5: state.clicker6Envelope += burst
+                    case 6: state.clicker7Envelope += burst
+                    default: state.clicker8Envelope += burst
+                    }
                 }
-                state.rattleEnvelope *= exp(-1 / (sampleRate * (0.014 + 0.018 * rattleEnergy)))
-                state.rattleBodyEnvelope *= exp(-1 / (sampleRate * (0.055 + 0.080 * rattleEnergy)))
-                let internalTone = oscillator((176 + 70 * speedFactor) * pitchMultiplier, phase: &state.rattleResonancePhase, waveform: .triangle)
-                value = rollBody * 0.075
-                    + tableTexture * 0.026
-                    + ballTone * 0.030
-                    + state.rattleBodyEnvelope * rollBody * 0.070
-                    + state.rattleEnvelope * internalTone * 0.050
+
+                state.clicker1Envelope *= exp(-1 / (sampleRate * (0.0038 + 0.0040 * chaos)))
+                state.clicker2Envelope *= exp(-1 / (sampleRate * (0.0045 + 0.0045 * chaos)))
+                state.clicker3Envelope *= exp(-1 / (sampleRate * (0.0052 + 0.0050 * chaos)))
+                state.clicker4Envelope *= exp(-1 / (sampleRate * (0.0060 + 0.0055 * chaos)))
+                state.clicker5Envelope *= exp(-1 / (sampleRate * (0.0068 + 0.0060 * chaos)))
+                state.clicker6Envelope *= exp(-1 / (sampleRate * (0.0076 + 0.0066 * chaos)))
+                state.clicker7Envelope *= exp(-1 / (sampleRate * (0.0084 + 0.0072 * chaos)))
+                state.clicker8Envelope *= exp(-1 / (sampleRate * (0.0092 + 0.0078 * chaos)))
+
+                let bearingA = oscillator(760 + Double.random(in: -80...80), phase: &state.tertiaryPhase, waveform: .triangle)
+                let bearingB = oscillator(1_120 + Double.random(in: -120...120), phase: &state.rattleResonancePhase)
+                let bearingC = highPass(
+                    lowPass(Double.random(in: -1...1), cutoff: 2_400, state: &state.midState),
+                    cutoff: 900,
+                    state: &state.highState,
+                    previousInput: &state.previousInput
+                )
+                let bearingD = highPass(
+                    Double.random(in: -1...1),
+                    cutoff: 2_600,
+                    state: &state.rattleBodyEnvelope,
+                    previousInput: &state.subPreviousInput
+                )
+                let bearingE = sin(state.primaryPhase * 2.71 + Double.random(in: -0.4...0.4))
+                let bearingF = sin(state.secondaryPhase * 3.9 + Double.random(in: -0.5...0.5))
+                let bearingG = bearingC * 0.65 + bearingA * 0.35
+                let bearingH = bearingD * 0.70 + bearingB * 0.30
+
+                let clicks = state.clicker1Envelope * bearingA * 0.115
+                    + state.clicker2Envelope * bearingB * 0.105
+                    + state.clicker3Envelope * bearingC * 0.120
+                    + state.clicker4Envelope * bearingD * 0.108
+                    + state.clicker5Envelope * bearingE * 0.095
+                    + state.clicker6Envelope * bearingF * 0.090
+                    + state.clicker7Envelope * bearingG * 0.098
+                    + state.clicker8Envelope * bearingH * 0.092
+                value = shellBody * 0.020 * movement
+                    + shellTone * 0.010
+                    + rotation * 0.004
+                    + clicks * (1.35 + chaos * 1.10)
             case 4: // Bearing Roll
-                let bearing = oscillator((150 + 110 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
-                let lower = oscillator((75 + 55 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase, waveform: .triangle)
-                let rotation = oscillator(5.5 + 7.5 * speedFactor, phase: &state.tertiaryPhase)
+                let bearing = oscillator((185 + 70 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let lower = oscillator((92 + 35 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase, waveform: .triangle)
+                let rotation = oscillator(7.0 + 9.0 * speedFactor, phase: &state.tertiaryPhase)
                 let body = lowPass(noise, cutoff: 90 + 110 * speedFactor, state: &state.lowState)
-                value = bearing * 0.044 + lower * 0.034 + rotation * 0.010 + body * 0.026
+                let mechanical = oscillator((370 + 90 * speedFactor) * pitchMultiplier, phase: &state.rattleResonancePhase, waveform: .triangle)
+                value = bearing * 0.060 + lower * 0.046 + mechanical * 0.020 + rotation * 0.014 + body * 0.030
             case 5: // Gentle Jingle
-                let carrier = oscillator((210 + 90 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
-                let bell = oscillator((420 + 180 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
-                let sway = oscillator(2.0 + 3.5 * speedFactor, phase: &state.tertiaryPhase)
+                let carrier = oscillator(260, phase: &state.primaryPhase)
+                let bell = oscillator(520, phase: &state.secondaryPhase)
+                let sway = oscillator(2.2 + 1.2 * speedFactor, phase: &state.tertiaryPhase)
                 if Double.random(in: 0...1) < (1.5 + 5.0 * speedFactor) / sampleRate {
-                    state.rattleEnvelope += Double.random(in: 0.025...0.09)
+                    state.rattleEnvelope += Double.random(in: 0.018...0.060)
                 }
-                state.rattleEnvelope *= exp(-1 / (sampleRate * 0.045))
-                value = carrier * 0.022 + bell * 0.018 + sway * 0.010 + state.rattleEnvelope * bell * 0.080
+                state.rattleEnvelope *= exp(-1 / (sampleRate * 0.060))
+                value = carrier * 0.026 + bell * 0.022 + sway * 0.008 + state.rattleEnvelope * bell * 0.055
             default: // Warm Buzz
                 let buzz = oscillator((118 + 40 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .triangle)
                 let warmth = oscillator((59 + 20 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)

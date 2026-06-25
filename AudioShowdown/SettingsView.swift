@@ -7,7 +7,7 @@ struct SettingsView: View {
     @State private var previewHaptics = GameHapticsEngine()
 
     private let puckSounds = ["Woodblock", "Marimba", "Tick", "Sine beep", "Square beep", "Pluck", "Cowbell", "Clave", "Water drop", "Sonar ping", "Piano", "Chime", "Glass", "Tom", "Laser"]
-    private let smoothPuckSounds = ["Low Synth", "Soft Hum", "Table Roll", "Showdown Ball", "Bearing Roll", "Gentle Jingle", "Warm Buzz"]
+    private let smoothPuckSounds = ["Low Synth", "Bright Hum", "Table Roll", "Showdown Ball", "Bearing Roll", "Gentle Jingle", "Warm Buzz"]
     private let pitchNames = ["Pitch off", "Subtle", "Strong"]
     private let pulseSpeeds = ["Slow", "Medium", "Fast"]
     private let puckSizes = ["Classic", "Big", "Gigantic"]

@@ -46,11 +46,13 @@ final class GameModel: ObservableObject {
     private var lastHitByPlayer: Bool?
     private var progressY = 600.0
     private var progressTime: TimeInterval = 0
+    private var previousTrainingPoint: CGPoint?
+    private var previousTrainingMoveTime: TimeInterval?
     private let training: Bool
 
     var isPaused: Bool { phase == .paused }
     var isGameOver: Bool { phase == .gameOver }
-    var scoreText: String { "You \(playerScore), Computer \(opponentScore)" }
+    var scoreText: String { "You: \(playerScore), Computer: \(opponentScore)" }
     var puckRadius: Double { [26, 34, 42][settings.puckSize] }
 
     static func pointsPerGoal(airHockeyMode: Bool) -> Int {
@@ -180,7 +182,16 @@ final class GameModel: ObservableObject {
 
     func touchBegan(at point: CGPoint) {
         if phase == .training {
-            puck.x = point.x; puck.y = point.y
+            let clamped = CGPoint(
+                x: clamp(Double(point.x), puckRadius, Self.width - puckRadius),
+                y: clamp(Double(point.y), puckRadius, Self.height - puckRadius)
+            )
+            puck.x = clamped.x
+            puck.y = clamped.y
+            puck.vx = 0
+            puck.vy = 0
+            previousTrainingPoint = clamped
+            previousTrainingMoveTime = Date.timeIntervalSinceReferenceDate
             return
         }
         guard phase == .waitingForServe || phase == .placedServe || phase == .live else { return }
@@ -203,8 +214,24 @@ final class GameModel: ObservableObject {
 
     func touchMoved(to point: CGPoint) {
         if phase == .training {
-            puck.x = clamp(point.x, puckRadius, Self.width - puckRadius)
-            puck.y = clamp(point.y, puckRadius, Self.height - puckRadius)
+            let clamped = CGPoint(
+                x: clamp(Double(point.x), puckRadius, Self.width - puckRadius),
+                y: clamp(Double(point.y), puckRadius, Self.height - puckRadius)
+            )
+            let now = Date.timeIntervalSinceReferenceDate
+            if let previousTrainingPoint, let previousTrainingMoveTime {
+                let dt = max(0.008, now - previousTrainingMoveTime)
+                puck.vx = (clamped.x - previousTrainingPoint.x) / dt
+                puck.vy = (clamped.y - previousTrainingPoint.y) / dt
+                let speed = hypot(puck.vx, puck.vy)
+                if settings.smoothPuckSound == 3, speed > 260 {
+                    audio.energizeSmoothPuck(amount: speed / 2_200)
+                }
+            }
+            puck.x = clamped.x
+            puck.y = clamped.y
+            previousTrainingPoint = clamped
+            previousTrainingMoveTime = now
             return
         }
         guard phase == .live || phase == .placedServe else { return }
@@ -236,9 +263,15 @@ final class GameModel: ObservableObject {
     func togglePause() {
         guard phase == .live || phase == .paused else { return }
         audio.stopMalletSlide()
+        audio.stopSmoothPuck()
         phase = phase == .paused ? .live : .paused
         previousTime = nil
         announce(phase == .paused ? "Game paused. Settings are available." : "Game resumed.")
+    }
+
+    func stopContinuousAudio() {
+        audio.stopSmoothPuck()
+        audio.stopMalletSlide()
     }
 
     func restart() {
