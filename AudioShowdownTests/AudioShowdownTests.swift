@@ -66,6 +66,34 @@ struct AudioShowdownTests {
         #expect(bottomInterval == 0.16)
     }
 
+    @Test func shapedPlayerStrikeKeepsMostlyUpwardMomentum() {
+        let shaped = GameModel.shapedStrikeVelocity(vx: 520, vy: -40, byPlayer: true)
+
+        #expect(shaped.vy <= -180)
+        #expect(abs(shaped.vx) < 520)
+    }
+
+    @Test func shapedComputerStrikeKeepsMostlyDownwardMomentum() {
+        let shaped = GameModel.shapedStrikeVelocity(vx: -520, vy: 40, byPlayer: false)
+
+        #expect(shaped.vy >= 180)
+        #expect(abs(shaped.vx) < 520)
+    }
+
+    @Test func deadPuckRecoveryNudgesTowardOpponentAfterPlayerHit() {
+        let recovered = GameModel.recoveredPuckVelocity(vx: 80, vy: 12, byPlayer: true)
+
+        #expect(recovered.vy <= -240)
+        #expect(abs(recovered.vx) <= 80)
+    }
+
+    @Test func deadPuckRecoveryNudgesTowardPlayerAfterComputerHit() {
+        let recovered = GameModel.recoveredPuckVelocity(vx: -80, vy: -12, byPlayer: false)
+
+        #expect(recovered.vy >= 240)
+        #expect(abs(recovered.vx) <= 80)
+    }
+
     @Test func oldApproachPulseSettingMigratesToMediumWithSpeedup() {
         let suiteName = "AudioShowdownTests.PulseMigration.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
