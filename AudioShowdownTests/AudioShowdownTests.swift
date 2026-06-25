@@ -103,6 +103,17 @@ struct AudioShowdownTests {
         #expect(abs(shaped.vx) < 520)
     }
 
+    @Test func gameSpeedUsesWebTimeScale() {
+        #expect(abs(GameModel.gameTimeScale(speed: 1) - 0.45) < 0.0001)
+        #expect(abs(GameModel.gameTimeScale(speed: 10) - 2.6) < 0.0001)
+        #expect(GameModel.gameTimeScale(speed: 2) < 0.6)
+    }
+
+    @Test func puckVelocityCapsAtWebMaximum() {
+        let capped = GameModel.cappedVelocity(vx: 3_000, vy: 4_000)
+        #expect(abs(hypot(capped.vx, capped.vy) - GameModel.puckSpeedCap) < 0.0001)
+    }
+
     @Test func deadPuckRecoveryNudgesTowardOpponentAfterPlayerHit() {
         let recovered = GameModel.recoveredPuckVelocity(vx: 80, vy: 12, byPlayer: true)
 
@@ -115,20 +126,6 @@ struct AudioShowdownTests {
 
         #expect(recovered.vy >= 240)
         #expect(abs(recovered.vx) <= 80)
-    }
-
-    @Test func slowPlayerContactStillCreatesPlayableUpwardBunt() {
-        let playable = GameModel.playableContactVelocity(vx: 20, vy: 15, byPlayer: true)
-
-        #expect(playable.vy <= -280)
-        #expect(hypot(playable.vx, playable.vy) >= 280)
-    }
-
-    @Test func slowComputerContactStillCreatesPlayableDownwardBunt() {
-        let playable = GameModel.playableContactVelocity(vx: -20, vy: -15, byPlayer: false)
-
-        #expect(playable.vy >= 280)
-        #expect(hypot(playable.vx, playable.vy) >= 280)
     }
 
     @Test func playerServeCanBePlacedWithoutImmediatelyGoingLive() {

@@ -7,7 +7,7 @@ struct SettingsView: View {
     @State private var previewHaptics = GameHapticsEngine()
 
     private let puckSounds = ["Woodblock", "Marimba", "Tick", "Sine beep", "Square beep", "Pluck", "Cowbell", "Clave", "Water drop", "Sonar ping", "Piano", "Chime", "Glass", "Tom", "Laser"]
-    private let smoothPuckSounds = ["Air Glide", "Table Slide", "Bearing Roll", "Showdown Rattle", "Ceramic Roll", "Plastic Scrape", "Soft Hum"]
+    private let smoothPuckSounds = ["Low Synth", "Soft Hum", "Table Roll", "Showdown Ball", "Bearing Roll", "Gentle Jingle", "Warm Buzz"]
     private let pitchNames = ["Pitch off", "Subtle", "Strong"]
     private let pulseSpeeds = ["Slow", "Medium", "Fast"]
     private let puckSizes = ["Classic", "Big", "Gigantic"]
@@ -252,7 +252,7 @@ struct SettingsView: View {
     }
 
     private func previewSmoothPuckSound(_ index: Int) {
-        audioEngine.updateSmoothPuck(
+        audioEngine.previewSmoothPuck(
             style: index,
             x: 0.5,
             proximity: 0.75,
@@ -261,10 +261,6 @@ struct SettingsView: View {
             distanceBehavior: settings.puckDistanceBehavior,
             closerIncreases: settings.closerIncreasesPuckFeedback
         )
-        if index == 3 { audioEngine.energizeSmoothPuck(amount: 0.8) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
-            audioEngine.stopSmoothPuck()
-        }
     }
 
     private func previewCurrentPuckSound() {

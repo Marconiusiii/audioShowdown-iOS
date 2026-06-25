@@ -260,14 +260,34 @@ final class GameAudioEngine {
             smoothPuckVoice.wetPlayer.stop()
         }
         primeSmoothPuckQueue(generation: smoothPuckGeneration)
-        let baseGain = distanceBehavior == .volume ? 0.12 + 0.82 * distanceFactor : 0.56
-        let speedGain = 0.45 + 0.55 * clamp(speed / 1_800)
+        let baseGain = distanceBehavior == .volume ? 0.48 + 0.42 * distanceFactor : 0.68
+        let speedGain = 0.72 + 0.28 * clamp(speed / 1_800)
         let gain = Float(baseGain * speedGain * clamp(volume))
         let position = spatialPosition(x: x, proximity: near)
         smoothPuckVoice.dryPlayer.position = position
         smoothPuckVoice.wetPlayer.position = position
         smoothPuckVoice.dryPlayer.volume = gain
         smoothPuckVoice.wetPlayer.volume = gain
+    }
+
+    func previewSmoothPuck(style: Int, x: Double, proximity: Double, speed: Double, volume: Double, distanceBehavior: PuckDistanceBehavior, closerIncreases: Bool) {
+        stopSmoothPuck()
+        guard volume > 0 else { return }
+        if !engine.isRunning { try? engine.start() }
+        let near = clamp(proximity)
+        let distanceFactor = closerIncreases ? near : 1 - near
+        let pitchMultiplier = distanceBehavior == .pitch ? 0.72 + 0.56 * distanceFactor : 1
+        let previewRattleEnergy = style == 3 ? 0.85 : 0.12
+        var previewState = SmoothPuckRenderState()
+        let buffer = renderSmoothPuckBuffer(
+            style: style,
+            speed: speed,
+            pitchMultiplier: pitchMultiplier,
+            rattleEnergy: previewRattleEnergy,
+            state: &previewState,
+            previewEnvelope: true
+        )
+        playPuck(buffer, x: x, proximity: near)
     }
 
     func stopSmoothPuck() {
@@ -596,7 +616,9 @@ final class GameAudioEngine {
                 style: smoothPuckStyle,
                 speed: smoothPuckRenderSpeed,
                 pitchMultiplier: smoothPuckPitchMultiplier,
-                rattleEnergy: smoothPuckRattleEnergy
+                rattleEnergy: smoothPuckRattleEnergy,
+                state: &smoothPuckRenderState,
+                previewEnvelope: false
             )
             smoothPuckQueuedBuffers += 1
             smoothPuckVoice.dryPlayer.scheduleBuffer(buffer) { [weak self] in
@@ -612,8 +634,8 @@ final class GameAudioEngine {
         }
     }
 
-    private func renderSmoothPuckBuffer(style: Int, speed: Double, pitchMultiplier: Double, rattleEnergy: Double) -> AVAudioPCMBuffer {
-        let duration = 0.28
+    private func renderSmoothPuckBuffer(style: Int, speed: Double, pitchMultiplier: Double, rattleEnergy: Double, state: inout SmoothPuckRenderState, previewEnvelope: Bool) -> AVAudioPCMBuffer {
+        let duration = previewEnvelope ? 0.65 : 0.28
         let frameCount = Int(duration * sourceFormat.sampleRate)
         let buffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(frameCount))!
         buffer.frameLength = AVAudioFrameCount(frameCount)
@@ -644,88 +666,81 @@ final class GameAudioEngine {
             let noise = Double.random(in: -1...1)
             let value: Double
             switch style {
-            case 0: // Air Glide
-                let body = lowPass(noise, cutoff: 120 + 220 * speedFactor, state: &smoothPuckRenderState.lowState)
-                let breath = lowPass(Double.random(in: -1...1), cutoff: 520 + 360 * speedFactor, state: &smoothPuckRenderState.midState)
-                let tone = oscillator(62 * pitchMultiplier + 22 * speedFactor, phase: &smoothPuckRenderState.primaryPhase)
-                value = body * 0.18 + breath * 0.045 + tone * 0.018
-            case 1: // Table Slide
-                let body = lowPass(noise, cutoff: 190 + 380 * speedFactor, state: &smoothPuckRenderState.lowState)
-                let grain = highPass(
-                    lowPass(Double.random(in: -1...1), cutoff: 1_200 + 620 * speedFactor, state: &smoothPuckRenderState.midState),
-                    cutoff: 160,
-                    state: &smoothPuckRenderState.highState,
-                    previousInput: &smoothPuckRenderState.previousInput
-                )
-                let rub = oscillator(84 * pitchMultiplier + 38 * speedFactor, phase: &smoothPuckRenderState.primaryPhase, waveform: .triangle)
-                value = body * 0.20 + grain * 0.032 + rub * 0.017
-            case 2: // Bearing Roll
-                let roll = lowPass(noise, cutoff: 260 + 520 * speedFactor, state: &smoothPuckRenderState.lowState)
-                let shimmer = highPass(
-                    lowPass(Double.random(in: -1...1), cutoff: 1_800 + 800 * speedFactor, state: &smoothPuckRenderState.midState),
-                    cutoff: 420,
-                    state: &smoothPuckRenderState.highState,
-                    previousInput: &smoothPuckRenderState.previousInput
-                )
-                let bearing = oscillator((145 + 115 * speedFactor) * pitchMultiplier, phase: &smoothPuckRenderState.primaryPhase)
-                let wobble = oscillator((41 + 25 * speedFactor) * pitchMultiplier, phase: &smoothPuckRenderState.secondaryPhase, waveform: .triangle)
-                value = roll * 0.12 + shimmer * 0.034 + bearing * 0.036 + wobble * 0.015
-            case 3: // Showdown Rattle
-                let rollBody = lowPass(noise, cutoff: 260 + 660 * speedFactor, state: &smoothPuckRenderState.lowState)
-                let roughBody = highPass(
-                    lowPass(Double.random(in: -1...1), cutoff: 1_800 + 1_600 * rattleEnergy, state: &smoothPuckRenderState.midState),
-                    cutoff: 210,
-                    state: &smoothPuckRenderState.highState,
-                    previousInput: &smoothPuckRenderState.previousInput
-                )
-                let eventRate = 8 + 30 * speedFactor + 52 * rattleEnergy
+            case 0: // Low Synth
+                let fundamental = oscillator((54 + 22 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let octave = oscillator((108 + 44 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase, waveform: .triangle)
+                let movement = oscillator(2.4 + 2.8 * speedFactor, phase: &state.tertiaryPhase)
+                let sub = lowPass(noise, cutoff: 42 + 35 * speedFactor, state: &state.lowState)
+                value = fundamental * 0.070 + octave * 0.026 + movement * 0.010 + sub * 0.035
+            case 1: // Soft Hum
+                let hum = oscillator((92 + 30 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let warmth = oscillator((184 + 60 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase, waveform: .triangle)
+                let drift = oscillator(3.0 + 2.0 * speedFactor, phase: &state.tertiaryPhase)
+                let body = lowPass(noise, cutoff: 65 + 60 * speedFactor, state: &state.lowState)
+                value = hum * 0.055 + warmth * 0.025 + drift * 0.014 + body * 0.030
+            case 2: // Table Roll
+                let roll = oscillator((74 + 42 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .triangle)
+                let wobble = oscillator((31 + 20 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let body = lowPass(noise, cutoff: 115 + 160 * speedFactor, state: &state.lowState)
+                let contact = lowPass(Double.random(in: -1...1), cutoff: 260 + 220 * speedFactor, state: &state.midState)
+                value = roll * 0.042 + wobble * 0.022 + body * 0.065 + contact * 0.020
+            case 3: // Showdown Ball
+                let rollBody = lowPass(noise, cutoff: 95 + 250 * speedFactor, state: &state.lowState)
+                let tableTexture = lowPass(Double.random(in: -1...1), cutoff: 280 + 250 * speedFactor, state: &state.midState)
+                let ballTone = oscillator((68 + 38 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .triangle)
+                let eventRate = 1.4 + 7.0 * speedFactor + 8.0 * rattleEnergy
                 let burstChance = eventRate / sampleRate
                 if Double.random(in: 0...1) < burstChance {
-                    let eventStrength = Double.random(in: 0.10...0.42) * (0.35 + speedFactor + rattleEnergy * 1.35)
-                    smoothPuckRenderState.rattleEnvelope += eventStrength
-                    smoothPuckRenderState.rattleBodyEnvelope += eventStrength * Double.random(in: 0.25...0.7)
+                    let eventStrength = Double.random(in: 0.018...0.075) * (0.22 + speedFactor * 0.42 + rattleEnergy * 0.45)
+                    state.rattleEnvelope += eventStrength
+                    state.rattleBodyEnvelope += eventStrength * Double.random(in: 0.22...0.50)
                 }
-                smoothPuckRenderState.rattleEnvelope *= exp(-1 / (sampleRate * (0.006 + 0.026 * rattleEnergy)))
-                smoothPuckRenderState.rattleBodyEnvelope *= exp(-1 / (sampleRate * (0.030 + 0.060 * rattleEnergy)))
-                let resonantFrequency = (360 + 240 * speedFactor + Double.random(in: -22...22)) * pitchMultiplier
-                let resonant = oscillator(resonantFrequency, phase: &smoothPuckRenderState.rattleResonancePhase, waveform: .triangle)
-                let grit = highPass(
-                    Double.random(in: -1...1),
-                    cutoff: 1_100 + 1_000 * speedFactor,
-                    state: &smoothPuckRenderState.tertiaryPhase,
-                    previousInput: &smoothPuckRenderState.subPreviousInput
-                )
-                value = rollBody * 0.13
-                    + roughBody * (0.036 + 0.030 * rattleEnergy)
-                    + smoothPuckRenderState.rattleBodyEnvelope * rollBody * 0.20
-                    + smoothPuckRenderState.rattleEnvelope * (resonant * 0.13 + grit * 0.085)
-            case 4: // Ceramic Roll
-                let ceramic = highPass(
-                    lowPass(noise, cutoff: 1_600 + 620 * speedFactor, state: &smoothPuckRenderState.lowState),
-                    cutoff: 300,
-                    state: &smoothPuckRenderState.highState,
-                    previousInput: &smoothPuckRenderState.previousInput
-                )
-                let ring = oscillator((420 + 120 * speedFactor) * pitchMultiplier, phase: &smoothPuckRenderState.primaryPhase)
-                let glass = oscillator((840 + 200 * speedFactor) * pitchMultiplier, phase: &smoothPuckRenderState.secondaryPhase)
-                value = ceramic * 0.048 + ring * 0.032 + glass * 0.010
-            case 5: // Plastic Scrape
-                let body = lowPass(noise, cutoff: 240 + 420 * speedFactor, state: &smoothPuckRenderState.lowState)
-                let scrape = highPass(
-                    lowPass(Double.random(in: -1...1), cutoff: 1_100 + 620 * speedFactor, state: &smoothPuckRenderState.midState),
-                    cutoff: 240,
-                    state: &smoothPuckRenderState.highState,
-                    previousInput: &smoothPuckRenderState.previousInput
-                )
-                let flex = oscillator((105 + 45 * speedFactor) * pitchMultiplier, phase: &smoothPuckRenderState.primaryPhase, waveform: .triangle)
-                value = body * 0.13 + scrape * 0.043 + flex * 0.020
-            default: // Soft Hum
-                let hum = lowPass(noise, cutoff: 150 + 160 * speedFactor, state: &smoothPuckRenderState.lowState)
-                let shimmer = lowPass(Double.random(in: -1...1), cutoff: 520 + 360 * speedFactor, state: &smoothPuckRenderState.midState)
-                let tone = oscillator((118 + 34 * speedFactor) * pitchMultiplier, phase: &smoothPuckRenderState.primaryPhase)
-                value = hum * 0.13 + shimmer * 0.025 + tone * 0.034
+                state.rattleEnvelope *= exp(-1 / (sampleRate * (0.014 + 0.018 * rattleEnergy)))
+                state.rattleBodyEnvelope *= exp(-1 / (sampleRate * (0.055 + 0.080 * rattleEnergy)))
+                let internalTone = oscillator((176 + 70 * speedFactor) * pitchMultiplier, phase: &state.rattleResonancePhase, waveform: .triangle)
+                value = rollBody * 0.075
+                    + tableTexture * 0.026
+                    + ballTone * 0.030
+                    + state.rattleBodyEnvelope * rollBody * 0.070
+                    + state.rattleEnvelope * internalTone * 0.050
+            case 4: // Bearing Roll
+                let bearing = oscillator((150 + 110 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let lower = oscillator((75 + 55 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase, waveform: .triangle)
+                let rotation = oscillator(5.5 + 7.5 * speedFactor, phase: &state.tertiaryPhase)
+                let body = lowPass(noise, cutoff: 90 + 110 * speedFactor, state: &state.lowState)
+                value = bearing * 0.044 + lower * 0.034 + rotation * 0.010 + body * 0.026
+            case 5: // Gentle Jingle
+                let carrier = oscillator((210 + 90 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let bell = oscillator((420 + 180 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let sway = oscillator(2.0 + 3.5 * speedFactor, phase: &state.tertiaryPhase)
+                if Double.random(in: 0...1) < (1.5 + 5.0 * speedFactor) / sampleRate {
+                    state.rattleEnvelope += Double.random(in: 0.025...0.09)
+                }
+                state.rattleEnvelope *= exp(-1 / (sampleRate * 0.045))
+                value = carrier * 0.022 + bell * 0.018 + sway * 0.010 + state.rattleEnvelope * bell * 0.080
+            default: // Warm Buzz
+                let buzz = oscillator((118 + 40 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .triangle)
+                let warmth = oscillator((59 + 20 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let pulse = oscillator(3.6 + 3.2 * speedFactor, phase: &state.tertiaryPhase)
+                let body = lowPass(noise, cutoff: 80 + 80 * speedFactor, state: &state.lowState)
+                value = buzz * 0.055 + warmth * 0.035 + pulse * 0.012 + body * 0.026
             }
-            samples[frame] = Float(tanh(value))
+            let rendered: Double
+            if previewEnvelope {
+                let edgeFrames = Int(0.018 * sampleRate)
+                let edgeGain: Double
+                if frame < edgeFrames {
+                    edgeGain = Double(frame) / Double(edgeFrames)
+                } else if frame > frameCount - edgeFrames {
+                    edgeGain = Double(frameCount - frame) / Double(edgeFrames)
+                } else {
+                    edgeGain = 1
+                }
+                rendered = value * edgeGain
+            } else {
+                rendered = value
+            }
+            samples[frame] = Float(tanh(rendered))
         }
         return buffer
     }
