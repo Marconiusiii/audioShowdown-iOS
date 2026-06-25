@@ -686,10 +686,10 @@ final class GameAudioEngine {
         func triggerClicker(_ countdown: inout Double, _ envelope: inout Double, baseRange: ClosedRange<Double>, chaos: Double) {
             countdown -= 1 / sampleRate
             guard countdown <= 0 else { return }
-            let chaosCompression = 1 - 0.68 * chaos
-            let interval = Double.random(in: baseRange) * max(0.28, chaosCompression)
-            countdown = interval * Double.random(in: 0.62...1.28)
-            envelope += Double.random(in: 1.10...2.20) * (0.78 + chaos * 1.85)
+            let chaosCompression = 1 - 0.62 * chaos
+            let interval = Double.random(in: baseRange) * max(0.36, chaosCompression)
+            countdown = interval * Double.random(in: 0.72...1.42)
+            envelope += Double.random(in: 1.0...1.55)
         }
 
         for frame in 0..<frameCount {
@@ -721,17 +721,17 @@ final class GameAudioEngine {
                 let shellTone = oscillator(56 + 22 * speedFactor, phase: &state.primaryPhase, waveform: .triangle)
                 let rotation = oscillator(2.5 + 5.0 * speedFactor, phase: &state.secondaryPhase)
 
-                triggerClicker(&state.clicker1Countdown, &state.clicker1Envelope, baseRange: 0.08...0.24, chaos: chaos)
-                triggerClicker(&state.clicker2Countdown, &state.clicker2Envelope, baseRange: 0.11...0.30, chaos: chaos)
-                triggerClicker(&state.clicker3Countdown, &state.clicker3Envelope, baseRange: 0.15...0.38, chaos: chaos)
-                triggerClicker(&state.clicker4Countdown, &state.clicker4Envelope, baseRange: 0.19...0.48, chaos: chaos)
-                triggerClicker(&state.clicker5Countdown, &state.clicker5Envelope, baseRange: 0.24...0.58, chaos: chaos)
-                triggerClicker(&state.clicker6Countdown, &state.clicker6Envelope, baseRange: 0.30...0.70, chaos: chaos)
-                triggerClicker(&state.clicker7Countdown, &state.clicker7Envelope, baseRange: 0.38...0.84, chaos: chaos)
-                triggerClicker(&state.clicker8Countdown, &state.clicker8Envelope, baseRange: 0.48...1.05, chaos: chaos)
+                triggerClicker(&state.clicker1Countdown, &state.clicker1Envelope, baseRange: 0.16...0.38, chaos: chaos)
+                triggerClicker(&state.clicker2Countdown, &state.clicker2Envelope, baseRange: 0.20...0.48, chaos: chaos)
+                triggerClicker(&state.clicker3Countdown, &state.clicker3Envelope, baseRange: 0.25...0.60, chaos: chaos)
+                triggerClicker(&state.clicker4Countdown, &state.clicker4Envelope, baseRange: 0.31...0.74, chaos: chaos)
+                triggerClicker(&state.clicker5Countdown, &state.clicker5Envelope, baseRange: 0.38...0.88, chaos: chaos)
+                triggerClicker(&state.clicker6Countdown, &state.clicker6Envelope, baseRange: 0.46...1.05, chaos: chaos)
+                triggerClicker(&state.clicker7Countdown, &state.clicker7Envelope, baseRange: 0.56...1.26, chaos: chaos)
+                triggerClicker(&state.clicker8Countdown, &state.clicker8Envelope, baseRange: 0.68...1.52, chaos: chaos)
 
                 if Double.random(in: 0...1) < (0.50 + chaos * 9.0 + speedFactor * 2.4) / sampleRate {
-                    let burst = Double.random(in: 0.70...2.10) * (0.72 + chaos)
+                    let burst = Double.random(in: 0.45...0.85)
                     switch Int.random(in: 0...7) {
                     case 0: state.clicker1Envelope += burst
                     case 1: state.clicker2Envelope += burst
@@ -744,46 +744,46 @@ final class GameAudioEngine {
                     }
                 }
 
-                state.clicker1Envelope *= exp(-1 / (sampleRate * (0.0038 + 0.0040 * chaos)))
-                state.clicker2Envelope *= exp(-1 / (sampleRate * (0.0045 + 0.0045 * chaos)))
-                state.clicker3Envelope *= exp(-1 / (sampleRate * (0.0052 + 0.0050 * chaos)))
-                state.clicker4Envelope *= exp(-1 / (sampleRate * (0.0060 + 0.0055 * chaos)))
-                state.clicker5Envelope *= exp(-1 / (sampleRate * (0.0068 + 0.0060 * chaos)))
-                state.clicker6Envelope *= exp(-1 / (sampleRate * (0.0076 + 0.0066 * chaos)))
-                state.clicker7Envelope *= exp(-1 / (sampleRate * (0.0084 + 0.0072 * chaos)))
-                state.clicker8Envelope *= exp(-1 / (sampleRate * (0.0092 + 0.0078 * chaos)))
+                state.clicker1Envelope *= exp(-1 / (sampleRate * 0.0026))
+                state.clicker2Envelope *= exp(-1 / (sampleRate * 0.0029))
+                state.clicker3Envelope *= exp(-1 / (sampleRate * 0.0032))
+                state.clicker4Envelope *= exp(-1 / (sampleRate * 0.0035))
+                state.clicker5Envelope *= exp(-1 / (sampleRate * 0.0038))
+                state.clicker6Envelope *= exp(-1 / (sampleRate * 0.0041))
+                state.clicker7Envelope *= exp(-1 / (sampleRate * 0.0044))
+                state.clicker8Envelope *= exp(-1 / (sampleRate * 0.0047))
 
-                let bearingA = oscillator(760 + Double.random(in: -80...80), phase: &state.tertiaryPhase, waveform: .triangle)
-                let bearingB = oscillator(1_120 + Double.random(in: -120...120), phase: &state.rattleResonancePhase)
+                let bearingA = oscillator(1_450 + Double.random(in: -180...180), phase: &state.tertiaryPhase, waveform: .square)
+                let bearingB = oscillator(2_050 + Double.random(in: -240...240), phase: &state.rattleResonancePhase, waveform: .triangle)
                 let bearingC = highPass(
-                    lowPass(Double.random(in: -1...1), cutoff: 2_400, state: &state.midState),
-                    cutoff: 900,
+                    lowPass(Double.random(in: -1...1), cutoff: 5_400, state: &state.midState),
+                    cutoff: 2_400,
                     state: &state.highState,
                     previousInput: &state.previousInput
                 )
                 let bearingD = highPass(
                     Double.random(in: -1...1),
-                    cutoff: 2_600,
+                    cutoff: 4_800,
                     state: &state.rattleBodyEnvelope,
                     previousInput: &state.subPreviousInput
                 )
-                let bearingE = sin(state.primaryPhase * 2.71 + Double.random(in: -0.4...0.4))
-                let bearingF = sin(state.secondaryPhase * 3.9 + Double.random(in: -0.5...0.5))
-                let bearingG = bearingC * 0.65 + bearingA * 0.35
-                let bearingH = bearingD * 0.70 + bearingB * 0.30
+                let bearingE = oscillator(2_850 + Double.random(in: -320...320), phase: &state.primaryPhase, waveform: .square)
+                let bearingF = oscillator(3_600 + Double.random(in: -420...420), phase: &state.secondaryPhase, waveform: .triangle)
+                let bearingG = bearingC * 0.82 + bearingA * 0.18
+                let bearingH = bearingD * 0.86 + bearingB * 0.14
 
-                let clicks = state.clicker1Envelope * bearingA * 0.115
-                    + state.clicker2Envelope * bearingB * 0.105
-                    + state.clicker3Envelope * bearingC * 0.120
-                    + state.clicker4Envelope * bearingD * 0.108
-                    + state.clicker5Envelope * bearingE * 0.095
-                    + state.clicker6Envelope * bearingF * 0.090
-                    + state.clicker7Envelope * bearingG * 0.098
-                    + state.clicker8Envelope * bearingH * 0.092
+                let clicks = state.clicker1Envelope * bearingA * 0.060
+                    + state.clicker2Envelope * bearingB * 0.056
+                    + state.clicker3Envelope * bearingC * 0.064
+                    + state.clicker4Envelope * bearingD * 0.062
+                    + state.clicker5Envelope * bearingE * 0.050
+                    + state.clicker6Envelope * bearingF * 0.048
+                    + state.clicker7Envelope * bearingG * 0.054
+                    + state.clicker8Envelope * bearingH * 0.052
                 value = shellBody * 0.020 * movement
                     + shellTone * 0.010
                     + rotation * 0.004
-                    + clicks * (1.35 + chaos * 1.10)
+                    + clicks * 1.35
             case 4: // Bearing Roll
                 let bearing = oscillator((185 + 70 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
                 let lower = oscillator((92 + 35 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase, waveform: .triangle)
