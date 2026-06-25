@@ -27,6 +27,20 @@ final class GameAudioEngine {
         let wetPlayer = AVAudioPlayerNode()
     }
 
+    private struct SmoothPuckRenderState {
+        var lowState = 0.0
+        var midState = 0.0
+        var highState = 0.0
+        var previousInput = 0.0
+        var subPreviousInput = 0.0
+        var primaryPhase = 0.0
+        var secondaryPhase = 0.0
+        var tertiaryPhase = 0.0
+        var rattleEnvelope = 0.0
+        var rattleBodyEnvelope = 0.0
+        var rattleResonancePhase = 0.0
+    }
+
     private let engine = AVAudioEngine()
     private let dryEnvironment = AVAudioEnvironmentNode()
     private let wetEnvironment = AVAudioEnvironmentNode()
@@ -44,8 +58,11 @@ final class GameAudioEngine {
     private var warmedUp = false
     private var malletSlideStyle = -1
     private var smoothPuckStyle = -1
-    private var smoothPuckPitchBucket = -1
-    private var smoothPuckRattleBucket = -1
+    private var smoothPuckGeneration = 0
+    private var smoothPuckQueuedBuffers = 0
+    private var smoothPuckRenderState = SmoothPuckRenderState()
+    private var smoothPuckRenderSpeed = 0.0
+    private var smoothPuckPitchMultiplier = 1.0
     private var smoothPuckRattleEnergy = 0.0
     private var lastWinMotifIndex = -1
     private var lastLossMotifIndex = -1
@@ -214,31 +231,35 @@ final class GameAudioEngine {
             return
         }
         if !engine.isRunning { try? engine.start() }
-        smoothPuckRattleEnergy = max(0, smoothPuckRattleEnergy - 0.012)
+        smoothPuckRattleEnergy = max(0, smoothPuckRattleEnergy - 0.010)
         let near = clamp(proximity)
         let distanceFactor = closerIncreases ? near : 1 - near
-        let pitchBucket = distanceBehavior == .pitch ? Int((distanceFactor * 8).rounded()) : 0
-        let rattleBucket = style == 3 ? Int((smoothPuckRattleEnergy * 5).rounded()) : 0
-        let needsLoop = style != smoothPuckStyle || pitchBucket != smoothPuckPitchBucket || rattleBucket != smoothPuckRattleBucket || !smoothPuckVoice.dryPlayer.isPlaying
-        if needsLoop {
+        smoothPuckRenderSpeed = speed
+        smoothPuckPitchMultiplier = distanceBehavior == .pitch ? 0.72 + 0.56 * distanceFactor : 1
+
+        if style != smoothPuckStyle || !smoothPuckVoice.dryPlayer.isPlaying {
+            smoothPuckGeneration += 1
             smoothPuckStyle = style
-            smoothPuckPitchBucket = pitchBucket
-            smoothPuckRattleBucket = rattleBucket
-            let pitchMultiplier = distanceBehavior == .pitch ? 0.75 + 0.08 * Double(pitchBucket) : 1
-            let buffer = renderSmoothPuckLoop(style: style, speed: speed, pitchMultiplier: pitchMultiplier, rattleEnergy: smoothPuckRattleEnergy)
+            smoothPuckQueuedBuffers = 0
+            smoothPuckRenderState = SmoothPuckRenderState()
             smoothPuckVoice.dryPlayer.stop()
-            smoothPuckVoice.dryPlayer.scheduleBuffer(buffer, at: nil, options: .loops)
-            smoothPuckVoice.dryPlayer.play()
             smoothPuckVoice.wetPlayer.stop()
-            smoothPuckVoice.wetPlayer.scheduleBuffer(buffer, at: nil, options: .loops)
+            primeSmoothPuckQueue(generation: smoothPuckGeneration)
+            smoothPuckVoice.dryPlayer.play()
             if reverbStyle > 0 { smoothPuckVoice.wetPlayer.play() }
         } else if reverbStyle > 0, !smoothPuckVoice.wetPlayer.isPlaying {
-            let buffer = renderSmoothPuckLoop(style: style, speed: speed, pitchMultiplier: 1, rattleEnergy: smoothPuckRattleEnergy)
-            smoothPuckVoice.wetPlayer.scheduleBuffer(buffer, at: nil, options: .loops)
+            smoothPuckGeneration += 1
+            smoothPuckQueuedBuffers = 0
+            smoothPuckRenderState = SmoothPuckRenderState()
+            smoothPuckVoice.dryPlayer.stop()
+            smoothPuckVoice.wetPlayer.stop()
+            primeSmoothPuckQueue(generation: smoothPuckGeneration)
+            smoothPuckVoice.dryPlayer.play()
             smoothPuckVoice.wetPlayer.play()
         } else if reverbStyle == 0, smoothPuckVoice.wetPlayer.isPlaying {
             smoothPuckVoice.wetPlayer.stop()
         }
+        primeSmoothPuckQueue(generation: smoothPuckGeneration)
         let baseGain = distanceBehavior == .volume ? 0.12 + 0.82 * distanceFactor : 0.56
         let speedGain = 0.45 + 0.55 * clamp(speed / 1_800)
         let gain = Float(baseGain * speedGain * clamp(volume))
@@ -255,6 +276,9 @@ final class GameAudioEngine {
         if smoothPuckVoice.dryPlayer.isPlaying { smoothPuckVoice.dryPlayer.stop() }
         if smoothPuckVoice.wetPlayer.isPlaying { smoothPuckVoice.wetPlayer.stop() }
         smoothPuckStyle = -1
+        smoothPuckGeneration += 1
+        smoothPuckQueuedBuffers = 0
+        smoothPuckRenderState = SmoothPuckRenderState()
     }
 
     func energizeSmoothPuck(amount: Double) {
@@ -565,17 +589,36 @@ final class GameAudioEngine {
         return buffer
     }
 
-    private func renderSmoothPuckLoop(style: Int, speed: Double, pitchMultiplier: Double, rattleEnergy: Double) -> AVAudioPCMBuffer {
-        let duration = 1.5
+    private func primeSmoothPuckQueue(generation: Int) {
+        guard generation == smoothPuckGeneration, smoothPuckStyle >= 0 else { return }
+        while smoothPuckQueuedBuffers < 4 {
+            let buffer = renderSmoothPuckBuffer(
+                style: smoothPuckStyle,
+                speed: smoothPuckRenderSpeed,
+                pitchMultiplier: smoothPuckPitchMultiplier,
+                rattleEnergy: smoothPuckRattleEnergy
+            )
+            smoothPuckQueuedBuffers += 1
+            smoothPuckVoice.dryPlayer.scheduleBuffer(buffer) { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self, generation == self.smoothPuckGeneration else { return }
+                    self.smoothPuckQueuedBuffers = max(0, self.smoothPuckQueuedBuffers - 1)
+                    self.primeSmoothPuckQueue(generation: generation)
+                }
+            }
+            if reverbStyle > 0 {
+                smoothPuckVoice.wetPlayer.scheduleBuffer(buffer)
+            }
+        }
+    }
+
+    private func renderSmoothPuckBuffer(style: Int, speed: Double, pitchMultiplier: Double, rattleEnergy: Double) -> AVAudioPCMBuffer {
+        let duration = 0.28
         let frameCount = Int(duration * sourceFormat.sampleRate)
         let buffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(frameCount))!
         buffer.frameLength = AVAudioFrameCount(frameCount)
         let samples = buffer.floatChannelData![0]
         let sampleRate = sourceFormat.sampleRate
-        var lowState = 0.0
-        var midState = 0.0
-        var highState = 0.0
-        var previousInput = 0.0
         let speedFactor = clamp(speed / 1_800)
 
         func lowPass(_ value: Double, cutoff: Double, state: inout Double) -> Double {
@@ -584,54 +627,105 @@ final class GameAudioEngine {
             return state
         }
 
-        func highPass(_ value: Double, cutoff: Double, state: inout Double) -> Double {
+        func highPass(_ value: Double, cutoff: Double, state: inout Double, previousInput: inout Double) -> Double {
             let alpha = exp(-2 * Double.pi * cutoff / sampleRate)
             state = alpha * (state + value - previousInput)
             previousInput = value
             return state
         }
 
+        func oscillator(_ frequency: Double, phase: inout Double, waveform: Waveform = .sine) -> Double {
+            phase += 2 * Double.pi * frequency / sampleRate
+            if phase > 2 * Double.pi { phase.formTruncatingRemainder(dividingBy: 2 * Double.pi) }
+            return waveformSample(phase: phase, waveform: waveform)
+        }
+
         for frame in 0..<frameCount {
-            let t = Double(frame) / sampleRate
             let noise = Double.random(in: -1...1)
             let value: Double
             switch style {
             case 0: // Air Glide
-                let glide = lowPass(noise, cutoff: 650 + 450 * speedFactor, state: &lowState)
-                value = glide * 0.12 + sin(2 * Double.pi * 90 * pitchMultiplier * t) * 0.035
+                let body = lowPass(noise, cutoff: 120 + 220 * speedFactor, state: &smoothPuckRenderState.lowState)
+                let breath = lowPass(Double.random(in: -1...1), cutoff: 520 + 360 * speedFactor, state: &smoothPuckRenderState.midState)
+                let tone = oscillator(62 * pitchMultiplier + 22 * speedFactor, phase: &smoothPuckRenderState.primaryPhase)
+                value = body * 0.18 + breath * 0.045 + tone * 0.018
             case 1: // Table Slide
-                let slide = lowPass(noise, cutoff: 900 + 700 * speedFactor, state: &lowState)
-                value = slide * 0.18 + waveformSample(phase: 2 * Double.pi * 115 * pitchMultiplier * t, waveform: .triangle) * 0.032
+                let body = lowPass(noise, cutoff: 190 + 380 * speedFactor, state: &smoothPuckRenderState.lowState)
+                let grain = highPass(
+                    lowPass(Double.random(in: -1...1), cutoff: 1_200 + 620 * speedFactor, state: &smoothPuckRenderState.midState),
+                    cutoff: 160,
+                    state: &smoothPuckRenderState.highState,
+                    previousInput: &smoothPuckRenderState.previousInput
+                )
+                let rub = oscillator(84 * pitchMultiplier + 38 * speedFactor, phase: &smoothPuckRenderState.primaryPhase, waveform: .triangle)
+                value = body * 0.20 + grain * 0.032 + rub * 0.017
             case 2: // Bearing Roll
-                let roll = lowPass(noise, cutoff: 1_400 + 1_100 * speedFactor, state: &lowState)
-                value = roll * 0.11 + sin(2 * Double.pi * (180 + 120 * speedFactor) * pitchMultiplier * t) * 0.052
+                let roll = lowPass(noise, cutoff: 260 + 520 * speedFactor, state: &smoothPuckRenderState.lowState)
+                let shimmer = highPass(
+                    lowPass(Double.random(in: -1...1), cutoff: 1_800 + 800 * speedFactor, state: &smoothPuckRenderState.midState),
+                    cutoff: 420,
+                    state: &smoothPuckRenderState.highState,
+                    previousInput: &smoothPuckRenderState.previousInput
+                )
+                let bearing = oscillator((145 + 115 * speedFactor) * pitchMultiplier, phase: &smoothPuckRenderState.primaryPhase)
+                let wobble = oscillator((41 + 25 * speedFactor) * pitchMultiplier, phase: &smoothPuckRenderState.secondaryPhase, waveform: .triangle)
+                value = roll * 0.12 + shimmer * 0.034 + bearing * 0.036 + wobble * 0.015
             case 3: // Showdown Rattle
-                let rate = 18 + 42 * speedFactor + 70 * rattleEnergy
-                let pulse = pow(max(0, sin(2 * Double.pi * rate * t)), 10)
-                let body = lowPass(noise, cutoff: 1_100 + 1_600 * rattleEnergy, state: &lowState)
-                let click = highPass(noise, cutoff: 1_200, state: &highState)
-                value = body * (0.10 + 0.12 * rattleEnergy) + click * pulse * (0.22 + 0.46 * rattleEnergy) + sin(2 * Double.pi * 135 * pitchMultiplier * t) * 0.025
+                let rollBody = lowPass(noise, cutoff: 260 + 660 * speedFactor, state: &smoothPuckRenderState.lowState)
+                let roughBody = highPass(
+                    lowPass(Double.random(in: -1...1), cutoff: 1_800 + 1_600 * rattleEnergy, state: &smoothPuckRenderState.midState),
+                    cutoff: 210,
+                    state: &smoothPuckRenderState.highState,
+                    previousInput: &smoothPuckRenderState.previousInput
+                )
+                let eventRate = 8 + 30 * speedFactor + 52 * rattleEnergy
+                let burstChance = eventRate / sampleRate
+                if Double.random(in: 0...1) < burstChance {
+                    let eventStrength = Double.random(in: 0.10...0.42) * (0.35 + speedFactor + rattleEnergy * 1.35)
+                    smoothPuckRenderState.rattleEnvelope += eventStrength
+                    smoothPuckRenderState.rattleBodyEnvelope += eventStrength * Double.random(in: 0.25...0.7)
+                }
+                smoothPuckRenderState.rattleEnvelope *= exp(-1 / (sampleRate * (0.006 + 0.026 * rattleEnergy)))
+                smoothPuckRenderState.rattleBodyEnvelope *= exp(-1 / (sampleRate * (0.030 + 0.060 * rattleEnergy)))
+                let resonantFrequency = (360 + 240 * speedFactor + Double.random(in: -22...22)) * pitchMultiplier
+                let resonant = oscillator(resonantFrequency, phase: &smoothPuckRenderState.rattleResonancePhase, waveform: .triangle)
+                let grit = highPass(
+                    Double.random(in: -1...1),
+                    cutoff: 1_100 + 1_000 * speedFactor,
+                    state: &smoothPuckRenderState.tertiaryPhase,
+                    previousInput: &smoothPuckRenderState.subPreviousInput
+                )
+                value = rollBody * 0.13
+                    + roughBody * (0.036 + 0.030 * rattleEnergy)
+                    + smoothPuckRenderState.rattleBodyEnvelope * rollBody * 0.20
+                    + smoothPuckRenderState.rattleEnvelope * (resonant * 0.13 + grit * 0.085)
             case 4: // Ceramic Roll
-                let ceramic = highPass(lowPass(noise, cutoff: 2_200, state: &lowState), cutoff: 340, state: &highState)
-                value = ceramic * 0.10 + sin(2 * Double.pi * 520 * pitchMultiplier * t) * 0.04 + sin(2 * Double.pi * 1_040 * pitchMultiplier * t) * 0.014
+                let ceramic = highPass(
+                    lowPass(noise, cutoff: 1_600 + 620 * speedFactor, state: &smoothPuckRenderState.lowState),
+                    cutoff: 300,
+                    state: &smoothPuckRenderState.highState,
+                    previousInput: &smoothPuckRenderState.previousInput
+                )
+                let ring = oscillator((420 + 120 * speedFactor) * pitchMultiplier, phase: &smoothPuckRenderState.primaryPhase)
+                let glass = oscillator((840 + 200 * speedFactor) * pitchMultiplier, phase: &smoothPuckRenderState.secondaryPhase)
+                value = ceramic * 0.048 + ring * 0.032 + glass * 0.010
             case 5: // Plastic Scrape
-                let scrape = highPass(lowPass(noise, cutoff: 1_600, state: &lowState), cutoff: 260, state: &highState)
-                value = scrape * 0.14 + waveformSample(phase: 2 * Double.pi * 160 * pitchMultiplier * t, waveform: .triangle) * 0.035
+                let body = lowPass(noise, cutoff: 240 + 420 * speedFactor, state: &smoothPuckRenderState.lowState)
+                let scrape = highPass(
+                    lowPass(Double.random(in: -1...1), cutoff: 1_100 + 620 * speedFactor, state: &smoothPuckRenderState.midState),
+                    cutoff: 240,
+                    state: &smoothPuckRenderState.highState,
+                    previousInput: &smoothPuckRenderState.previousInput
+                )
+                let flex = oscillator((105 + 45 * speedFactor) * pitchMultiplier, phase: &smoothPuckRenderState.primaryPhase, waveform: .triangle)
+                value = body * 0.13 + scrape * 0.043 + flex * 0.020
             default: // Soft Hum
-                let hum = lowPass(noise, cutoff: 280, state: &lowState)
-                let shimmer = lowPass(Double.random(in: -1...1), cutoff: 1_000, state: &midState)
-                value = hum * 0.10 + shimmer * 0.04 + sin(2 * Double.pi * 150 * pitchMultiplier * t) * 0.055
+                let hum = lowPass(noise, cutoff: 150 + 160 * speedFactor, state: &smoothPuckRenderState.lowState)
+                let shimmer = lowPass(Double.random(in: -1...1), cutoff: 520 + 360 * speedFactor, state: &smoothPuckRenderState.midState)
+                let tone = oscillator((118 + 34 * speedFactor) * pitchMultiplier, phase: &smoothPuckRenderState.primaryPhase)
+                value = hum * 0.13 + shimmer * 0.025 + tone * 0.034
             }
-            let edgeFrames = Int(0.02 * sampleRate)
-            let edgeGain: Double
-            if frame < edgeFrames {
-                edgeGain = Double(frame) / Double(edgeFrames)
-            } else if frame > frameCount - edgeFrames {
-                edgeGain = Double(frameCount - frame) / Double(edgeFrames)
-            } else {
-                edgeGain = 1
-            }
-            samples[frame] = Float(tanh(value * edgeGain))
+            samples[frame] = Float(tanh(value))
         }
         return buffer
     }
