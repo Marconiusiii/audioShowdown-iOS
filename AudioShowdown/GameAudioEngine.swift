@@ -33,6 +33,7 @@ final class GameAudioEngine {
     private let wetMixer = AVAudioMixerNode()
     private let sourceFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
     private let malletSlideVoice = SpatialVoice()
+    private let smoothPuckVoice = SpatialVoice()
     private var puckVoices: [SpatialVoice] = []
     private var effectVoices: [SpatialVoice] = []
     private var nextPuckVoice = 0
@@ -42,6 +43,10 @@ final class GameAudioEngine {
     private var puckVolume = 0.8
     private var warmedUp = false
     private var malletSlideStyle = -1
+    private var smoothPuckStyle = -1
+    private var smoothPuckPitchBucket = -1
+    private var smoothPuckRattleBucket = -1
+    private var smoothPuckRattleEnergy = 0.0
     private var lastWinMotifIndex = -1
     private var lastLossMotifIndex = -1
 
@@ -58,6 +63,7 @@ final class GameAudioEngine {
         wetEnvironment.reverbParameters.enable = true
         wetMixer.outputVolume = 0
         configure(voice: malletSlideVoice)
+        configure(voice: smoothPuckVoice)
         puckVoices = makeVoices(count: 10)
         effectVoices = makeVoices(count: 16)
     }
@@ -202,6 +208,59 @@ final class GameAudioEngine {
         playPuck(buffer, x: x, proximity: near)
     }
 
+    func updateSmoothPuck(style: Int, x: Double, proximity: Double, speed: Double, volume: Double, distanceBehavior: PuckDistanceBehavior, closerIncreases: Bool) {
+        guard volume > 0 else {
+            stopSmoothPuck()
+            return
+        }
+        if !engine.isRunning { try? engine.start() }
+        smoothPuckRattleEnergy = max(0, smoothPuckRattleEnergy - 0.012)
+        let near = clamp(proximity)
+        let distanceFactor = closerIncreases ? near : 1 - near
+        let pitchBucket = distanceBehavior == .pitch ? Int((distanceFactor * 8).rounded()) : 0
+        let rattleBucket = style == 3 ? Int((smoothPuckRattleEnergy * 5).rounded()) : 0
+        let needsLoop = style != smoothPuckStyle || pitchBucket != smoothPuckPitchBucket || rattleBucket != smoothPuckRattleBucket || !smoothPuckVoice.dryPlayer.isPlaying
+        if needsLoop {
+            smoothPuckStyle = style
+            smoothPuckPitchBucket = pitchBucket
+            smoothPuckRattleBucket = rattleBucket
+            let pitchMultiplier = distanceBehavior == .pitch ? 0.75 + 0.08 * Double(pitchBucket) : 1
+            let buffer = renderSmoothPuckLoop(style: style, speed: speed, pitchMultiplier: pitchMultiplier, rattleEnergy: smoothPuckRattleEnergy)
+            smoothPuckVoice.dryPlayer.stop()
+            smoothPuckVoice.dryPlayer.scheduleBuffer(buffer, at: nil, options: .loops)
+            smoothPuckVoice.dryPlayer.play()
+            smoothPuckVoice.wetPlayer.stop()
+            smoothPuckVoice.wetPlayer.scheduleBuffer(buffer, at: nil, options: .loops)
+            if reverbStyle > 0 { smoothPuckVoice.wetPlayer.play() }
+        } else if reverbStyle > 0, !smoothPuckVoice.wetPlayer.isPlaying {
+            let buffer = renderSmoothPuckLoop(style: style, speed: speed, pitchMultiplier: 1, rattleEnergy: smoothPuckRattleEnergy)
+            smoothPuckVoice.wetPlayer.scheduleBuffer(buffer, at: nil, options: .loops)
+            smoothPuckVoice.wetPlayer.play()
+        } else if reverbStyle == 0, smoothPuckVoice.wetPlayer.isPlaying {
+            smoothPuckVoice.wetPlayer.stop()
+        }
+        let baseGain = distanceBehavior == .volume ? 0.12 + 0.82 * distanceFactor : 0.56
+        let speedGain = 0.45 + 0.55 * clamp(speed / 1_800)
+        let gain = Float(baseGain * speedGain * clamp(volume))
+        let position = spatialPosition(x: x, proximity: near)
+        smoothPuckVoice.dryPlayer.position = position
+        smoothPuckVoice.wetPlayer.position = position
+        smoothPuckVoice.dryPlayer.volume = gain
+        smoothPuckVoice.wetPlayer.volume = gain
+    }
+
+    func stopSmoothPuck() {
+        smoothPuckVoice.dryPlayer.volume = 0
+        smoothPuckVoice.wetPlayer.volume = 0
+        if smoothPuckVoice.dryPlayer.isPlaying { smoothPuckVoice.dryPlayer.stop() }
+        if smoothPuckVoice.wetPlayer.isPlaying { smoothPuckVoice.wetPlayer.stop() }
+        smoothPuckStyle = -1
+    }
+
+    func energizeSmoothPuck(amount: Double) {
+        smoothPuckRattleEnergy = clamp(smoothPuckRattleEnergy + amount)
+    }
+
     func strike(style: Int, x: Double, byPlayer: Bool = true) {
         let baseGain = 0.75
         let tones: [Tone]
@@ -241,13 +300,13 @@ final class GameAudioEngine {
         playEffect(render(tones: tones, noises: noises, gain: baseGain), x: x, proximity: byPlayer ? 0.9 : 0.15)
     }
 
-    func updateMalletSlide(style: Int, x: Double, speed: Double) {
-        guard style > 0, speed > 0 else {
+    func updateMalletSlide(style: Int, x: Double, speed: Double, volume: Double) {
+        guard style > 0, speed > 0, volume > 0 else {
             stopMalletSlide()
             return
         }
         if !engine.isRunning { try? engine.start() }
-        let gain = Float(0.035 + 0.40 * clamp(speed / 1_400))
+        let gain = Float((0.025 + 0.30 * clamp(speed / 1_400)) * clamp(volume))
         let position = spatialPosition(x: x, proximity: 0.95)
         if style != malletSlideStyle || !malletSlideVoice.dryPlayer.isPlaying {
             malletSlideStyle = style
@@ -471,26 +530,99 @@ final class GameAudioEngine {
             let value: Double
             switch style {
             case 1: // Wood
-                let grain = lowPass(noise, cutoff: 1_400, state: &lowState)
-                value = grain * 0.38 + sin(2 * Double.pi * 120 * t) * 0.055 + sin(2 * Double.pi * 240 * t) * 0.025
+                let grain = lowPass(noise, cutoff: 850, state: &lowState)
+                let chatter = abs(sin(2 * Double.pi * 37 * t)) * 2 - 1
+                value = grain * 0.28 + chatter * 0.045 + sin(2 * Double.pi * 118 * t) * 0.045 + sin(2 * Double.pi * 236 * t) * 0.018
             case 2: // Rubber
-                let drag = lowPass(noise, cutoff: 420, state: &lowState)
-                value = drag * 0.46 + sin(2 * Double.pi * 78 * t) * 0.08
+                let drag = lowPass(noise, cutoff: 260, state: &lowState)
+                let grip = waveformSample(phase: 2 * Double.pi * 54 * t, waveform: .triangle)
+                value = drag * 0.34 + grip * 0.07 + sin(2 * Double.pi * 112 * t) * 0.025
             case 3: // Iron
-                let scrape = highPass(noise, cutoff: 1_900, state: &highState)
-                value = scrape * 0.18 + sin(2 * Double.pi * 620 * t) * 0.05 + sin(2 * Double.pi * 1_260 * t) * 0.025
+                let scrape = highPass(lowPass(noise, cutoff: 2_200, state: &lowState), cutoff: 320, state: &highState)
+                value = scrape * 0.11 + sin(2 * Double.pi * 430 * t) * 0.052 + sin(2 * Double.pi * 860 * t) * 0.022
             case 4: // Gold
-                let polish = highPass(lowPass(noise, cutoff: 4_600, state: &lowState), cutoff: 900, state: &highState)
-                value = polish * 0.13 + sin(2 * Double.pi * 880 * t) * 0.045 + sin(2 * Double.pi * 1_760 * t) * 0.018
+                let polish = highPass(lowPass(noise, cutoff: 2_800, state: &lowState), cutoff: 420, state: &highState)
+                value = polish * 0.08 + sin(2 * Double.pi * 660 * t) * 0.05 + sin(2 * Double.pi * 1_320 * t) * 0.017
             case 5: // Stone
-                let rough = lowPass(noise, cutoff: 950, state: &lowState)
-                let grit = highPass(noise, cutoff: 240, state: &midState)
-                value = rough * 0.32 + grit * 0.12 + sin(2 * Double.pi * 96 * t) * 0.045
+                let rough = lowPass(noise, cutoff: 620, state: &lowState)
+                let grit = highPass(lowPass(Double.random(in: -1...1), cutoff: 1_400, state: &midState), cutoff: 180, state: &highState)
+                value = rough * 0.25 + grit * 0.09 + waveformSample(phase: 2 * Double.pi * 83 * t, waveform: .triangle) * 0.04
             default: // Plastic
-                let squeak = highPass(lowPass(noise, cutoff: 3_200, state: &lowState), cutoff: 700, state: &highState)
-                value = squeak * 0.16 + sin(2 * Double.pi * 330 * t) * 0.035 + waveformSample(phase: 2 * Double.pi * 165 * t, waveform: .triangle) * 0.025
+                let scrape = highPass(lowPass(noise, cutoff: 1_900, state: &lowState), cutoff: 260, state: &highState)
+                value = scrape * 0.10 + sin(2 * Double.pi * 290 * t) * 0.035 + waveformSample(phase: 2 * Double.pi * 145 * t, waveform: .triangle) * 0.035
             }
             let edgeFrames = Int(0.025 * sampleRate)
+            let edgeGain: Double
+            if frame < edgeFrames {
+                edgeGain = Double(frame) / Double(edgeFrames)
+            } else if frame > frameCount - edgeFrames {
+                edgeGain = Double(frameCount - frame) / Double(edgeFrames)
+            } else {
+                edgeGain = 1
+            }
+            samples[frame] = Float(tanh(value * edgeGain))
+        }
+        return buffer
+    }
+
+    private func renderSmoothPuckLoop(style: Int, speed: Double, pitchMultiplier: Double, rattleEnergy: Double) -> AVAudioPCMBuffer {
+        let duration = 1.5
+        let frameCount = Int(duration * sourceFormat.sampleRate)
+        let buffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(frameCount))!
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        let samples = buffer.floatChannelData![0]
+        let sampleRate = sourceFormat.sampleRate
+        var lowState = 0.0
+        var midState = 0.0
+        var highState = 0.0
+        var previousInput = 0.0
+        let speedFactor = clamp(speed / 1_800)
+
+        func lowPass(_ value: Double, cutoff: Double, state: inout Double) -> Double {
+            let alpha = 1 - exp(-2 * Double.pi * cutoff / sampleRate)
+            state += alpha * (value - state)
+            return state
+        }
+
+        func highPass(_ value: Double, cutoff: Double, state: inout Double) -> Double {
+            let alpha = exp(-2 * Double.pi * cutoff / sampleRate)
+            state = alpha * (state + value - previousInput)
+            previousInput = value
+            return state
+        }
+
+        for frame in 0..<frameCount {
+            let t = Double(frame) / sampleRate
+            let noise = Double.random(in: -1...1)
+            let value: Double
+            switch style {
+            case 0: // Air Glide
+                let glide = lowPass(noise, cutoff: 650 + 450 * speedFactor, state: &lowState)
+                value = glide * 0.12 + sin(2 * Double.pi * 90 * pitchMultiplier * t) * 0.035
+            case 1: // Table Slide
+                let slide = lowPass(noise, cutoff: 900 + 700 * speedFactor, state: &lowState)
+                value = slide * 0.18 + waveformSample(phase: 2 * Double.pi * 115 * pitchMultiplier * t, waveform: .triangle) * 0.032
+            case 2: // Bearing Roll
+                let roll = lowPass(noise, cutoff: 1_400 + 1_100 * speedFactor, state: &lowState)
+                value = roll * 0.11 + sin(2 * Double.pi * (180 + 120 * speedFactor) * pitchMultiplier * t) * 0.052
+            case 3: // Showdown Rattle
+                let rate = 18 + 42 * speedFactor + 70 * rattleEnergy
+                let pulse = pow(max(0, sin(2 * Double.pi * rate * t)), 10)
+                let body = lowPass(noise, cutoff: 1_100 + 1_600 * rattleEnergy, state: &lowState)
+                let click = highPass(noise, cutoff: 1_200, state: &highState)
+                value = body * (0.10 + 0.12 * rattleEnergy) + click * pulse * (0.22 + 0.46 * rattleEnergy) + sin(2 * Double.pi * 135 * pitchMultiplier * t) * 0.025
+            case 4: // Ceramic Roll
+                let ceramic = highPass(lowPass(noise, cutoff: 2_200, state: &lowState), cutoff: 340, state: &highState)
+                value = ceramic * 0.10 + sin(2 * Double.pi * 520 * pitchMultiplier * t) * 0.04 + sin(2 * Double.pi * 1_040 * pitchMultiplier * t) * 0.014
+            case 5: // Plastic Scrape
+                let scrape = highPass(lowPass(noise, cutoff: 1_600, state: &lowState), cutoff: 260, state: &highState)
+                value = scrape * 0.14 + waveformSample(phase: 2 * Double.pi * 160 * pitchMultiplier * t, waveform: .triangle) * 0.035
+            default: // Soft Hum
+                let hum = lowPass(noise, cutoff: 280, state: &lowState)
+                let shimmer = lowPass(Double.random(in: -1...1), cutoff: 1_000, state: &midState)
+                value = hum * 0.10 + shimmer * 0.04 + sin(2 * Double.pi * 150 * pitchMultiplier * t) * 0.055
+            }
+            let edgeFrames = Int(0.02 * sampleRate)
             let edgeGain: Double
             if frame < edgeFrames {
                 edgeGain = Double(frame) / Double(edgeFrames)

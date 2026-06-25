@@ -24,6 +24,29 @@ struct AudioShowdownTests {
         #expect(restoredSettings.reverbStyle == 3)
     }
 
+    @Test func puckTrackingDefaultsToPulseWithVolumeDistanceAvailable() {
+        let suiteName = "AudioShowdownTests.PuckTracking.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let settings = GameSettings(defaults: defaults)
+        #expect(settings.puckTrackingStyle == .pulse)
+        #expect(settings.smoothPuckSound == 3)
+        #expect(settings.puckDistanceBehavior == .volume)
+        #expect(settings.closerIncreasesPuckFeedback)
+
+        settings.puckTrackingStyle = .smooth
+        settings.smoothPuckSound = 5
+        settings.puckDistanceBehavior = .pitch
+        settings.closerIncreasesPuckFeedback = false
+
+        let restoredSettings = GameSettings(defaults: defaults)
+        #expect(restoredSettings.puckTrackingStyle == .smooth)
+        #expect(restoredSettings.smoothPuckSound == 5)
+        #expect(restoredSettings.puckDistanceBehavior == .pitch)
+        #expect(!restoredSettings.closerIncreasesPuckFeedback)
+    }
+
 
     @Test func scoringAndWinningRules() {
         #expect(GameModel.pointsPerGoal(airHockeyMode: false) == 2)

@@ -141,6 +141,7 @@ final class GameModel: ObservableObject {
         self.previousTime = now
         guard phase == .live else {
             if phase == .training || phase == .placedServe { updatePuckAudio(now: now) }
+            else { audio.stopSmoothPuck() }
             return
         }
         let timeScale = 0.45 * pow(2.6 / 0.45, (settings.gameSpeed - 1) / 9)
@@ -251,7 +252,7 @@ final class GameModel: ObservableObject {
         }
         let movementSpeed = hypot(playerMallet.vx, playerMallet.vy)
         if settings.movementSound > 0, movementSpeed > 60 {
-            audio.updateMalletSlide(style: settings.movementSound, x: next.x / Self.width, speed: movementSpeed)
+            audio.updateMalletSlide(style: settings.movementSound, x: next.x / Self.width, speed: movementSpeed, volume: settings.malletSlideVolume)
         } else {
             audio.stopMalletSlide()
         }
@@ -287,6 +288,7 @@ final class GameModel: ObservableObject {
             guard now - lastRicochetTime >= 0.055 else { return }
             lastRicochetTime = now
             let impactSpeed = hypot(puck.vx, puck.vy)
+            audio.energizeSmoothPuck(amount: impactSpeed / 2_800)
             audio.ricochet(x: puck.x / Self.width, speed: impactSpeed)
             haptics.play(.wall, level: settings.haptics, strength: impactSpeed / 1_400)
         }
@@ -409,6 +411,7 @@ final class GameModel: ObservableObject {
             lastOpponentStrikeTime = now
         }
         audio.strike(style: settings.strikeSound, x: puck.x / Self.width, byPlayer: byPlayer)
+        audio.energizeSmoothPuck(amount: speed / 2_400)
         haptics.play(
             byPlayer ? .playerStrike : .computerStrike,
             level: settings.haptics,
@@ -499,12 +502,14 @@ final class GameModel: ObservableObject {
         advanceServe(pointToPlayer: player)
         if hasWinner {
             phase = .gameOver
+            audio.stopSmoothPuck()
             if playerScore > opponentScore { audio.matchWon() }
             else { audio.matchLost() }
             haptics.play(.gameOver, level: settings.haptics)
             announce("\(playerScore > opponentScore ? "You win!" : "Computer wins.") Final score, \(scoreText). Double-tap the table to play again. Triple-tap to return home.")
         } else {
             audio.goal(playerScored: player)
+            audio.stopSmoothPuck()
             haptics.play(.goal, level: settings.haptics)
             phase = .waitingForServe; puck = Disc(x: 300, y: 600)
             resetPuckRecoveryState()
@@ -515,6 +520,7 @@ final class GameModel: ObservableObject {
     private func boardBall(againstPlayer: Bool) {
         if againstPlayer { opponentScore += 1 } else { playerScore += 1 }
         audio.boardBall(); haptics.play(.boardBall, level: settings.haptics)
+        audio.stopSmoothPuck()
         advanceShowdownServe()
         puck = Disc(x: 300, y: 600)
         resetPuckRecoveryState()
@@ -562,8 +568,21 @@ final class GameModel: ObservableObject {
     }
 
     private func updatePuckAudio(now: TimeInterval) {
-        guard now >= nextPingTime else { return }
         let proximity = Self.playerProximity(forY: puck.y)
+        if settings.puckTrackingStyle == .smooth {
+            audio.updateSmoothPuck(
+                style: settings.smoothPuckSound,
+                x: puck.x / Self.width,
+                proximity: proximity,
+                speed: hypot(puck.vx, puck.vy),
+                volume: settings.puckVolume,
+                distanceBehavior: settings.puckDistanceBehavior,
+                closerIncreases: settings.closerIncreasesPuckFeedback
+            )
+            return
+        }
+        audio.stopSmoothPuck()
+        guard now >= nextPingTime else { return }
         let base = Self.puckPulseInterval(
             speed: settings.pingRate,
             speedsUpWhenApproaching: settings.speedsUpWhenApproaching,

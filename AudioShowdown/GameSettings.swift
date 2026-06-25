@@ -8,6 +8,18 @@ enum HapticsLevel: String, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
+enum PuckTrackingStyle: String, CaseIterable, Identifiable {
+    case pulse = "Pulse"
+    case smooth = "Smooth"
+    var id: Self { self }
+}
+
+enum PuckDistanceBehavior: String, CaseIterable, Identifiable {
+    case volume = "Volume Changes"
+    case pitch = "Pitch Changes"
+    var id: Self { self }
+}
+
 @MainActor
 final class GameSettings: ObservableObject {
     private let defaults: UserDefaults
@@ -15,7 +27,11 @@ final class GameSettings: ObservableObject {
     @Published var opponentSkill: Double { didSet { save() } }
     @Published var gameSpeed: Double { didSet { save() } }
     @Published var puckSize: Int { didSet { save() } }
+    @Published var puckTrackingStyle: PuckTrackingStyle { didSet { save() } }
     @Published var puckSound: Int { didSet { save() } }
+    @Published var smoothPuckSound: Int { didSet { save() } }
+    @Published var puckDistanceBehavior: PuckDistanceBehavior { didSet { save() } }
+    @Published var closerIncreasesPuckFeedback: Bool { didSet { save() } }
     @Published var pitchBehavior: Int { didSet { save() } }
     @Published var lowerPitchWhenCloser: Bool { didSet { save() } }
     @Published var pingRate: Int { didSet { save() } }
@@ -24,6 +40,7 @@ final class GameSettings: ObservableObject {
     @Published var centerCrossingSound: Bool { didSet { save() } }
     @Published var centerCrossingVolume: Double { didSet { save() } }
     @Published var movementSound: Int { didSet { save() } }
+    @Published var malletSlideVolume: Double { didSet { save() } }
     @Published var strikeSound: Int { didSet { save() } }
     @Published var themeIndex: Int { didSet { save() } }
     @Published var volume: Double { didSet { save() } }
@@ -36,7 +53,11 @@ final class GameSettings: ObservableObject {
         opponentSkill = Self.clamp(defaults.object(forKey: "opponentSkill") as? Double ?? 5, 1...10)
         gameSpeed = Self.clamp(defaults.object(forKey: "gameSpeed") as? Double ?? 5, 1...10)
         puckSize = Self.clamp(defaults.object(forKey: "puckSize") as? Int ?? 0, 0...2)
+        puckTrackingStyle = PuckTrackingStyle(rawValue: defaults.string(forKey: "puckTrackingStyle") ?? "") ?? .pulse
         puckSound = Self.clamp(defaults.object(forKey: "puckSound") as? Int ?? 0, 0...14)
+        smoothPuckSound = Self.clamp(defaults.object(forKey: "smoothPuckSound") as? Int ?? 3, 0...6)
+        puckDistanceBehavior = PuckDistanceBehavior(rawValue: defaults.string(forKey: "puckDistanceBehavior") ?? "") ?? .volume
+        closerIncreasesPuckFeedback = defaults.object(forKey: "closerIncreasesPuckFeedback") as? Bool ?? true
         pitchBehavior = Self.clamp(defaults.object(forKey: "pitchBehavior") as? Int ?? 0, 0...2)
         lowerPitchWhenCloser = defaults.bool(forKey: "lowerPitch")
         let savedPulseVersion = defaults.integer(forKey: "pulseSettingsVersion")
@@ -56,6 +77,7 @@ final class GameSettings: ObservableObject {
         centerCrossingSound = defaults.object(forKey: "centerSound") as? Bool ?? true
         centerCrossingVolume = Self.clamp(defaults.object(forKey: "centerVolume") as? Double ?? 0.5, 0...1)
         movementSound = Self.clamp(defaults.object(forKey: "movementSound") as? Int ?? 1, 0...6)
+        malletSlideVolume = Self.clamp(defaults.object(forKey: "malletSlideVolume") as? Double ?? 0.35, 0...1)
         strikeSound = Self.clamp(defaults.object(forKey: "strikeSound") as? Int ?? 0, 0...9)
         themeIndex = Self.clamp(defaults.object(forKey: "theme") as? Int ?? 0, 0...8)
         volume = Self.clamp(defaults.object(forKey: "volume") as? Double ?? 0.8, 0...1)
@@ -73,7 +95,11 @@ final class GameSettings: ObservableObject {
         defaults.set(opponentSkill, forKey: "opponentSkill")
         defaults.set(gameSpeed, forKey: "gameSpeed")
         defaults.set(puckSize, forKey: "puckSize")
+        defaults.set(puckTrackingStyle.rawValue, forKey: "puckTrackingStyle")
         defaults.set(puckSound, forKey: "puckSound")
+        defaults.set(smoothPuckSound, forKey: "smoothPuckSound")
+        defaults.set(puckDistanceBehavior.rawValue, forKey: "puckDistanceBehavior")
+        defaults.set(closerIncreasesPuckFeedback, forKey: "closerIncreasesPuckFeedback")
         defaults.set(pitchBehavior, forKey: "pitchBehavior")
         defaults.set(lowerPitchWhenCloser, forKey: "lowerPitch")
         defaults.set(pingRate, forKey: "pingRate")
@@ -83,6 +109,7 @@ final class GameSettings: ObservableObject {
         defaults.set(centerCrossingSound, forKey: "centerSound")
         defaults.set(centerCrossingVolume, forKey: "centerVolume")
         defaults.set(movementSound, forKey: "movementSound")
+        defaults.set(malletSlideVolume, forKey: "malletSlideVolume")
         defaults.set(strikeSound, forKey: "strikeSound")
         defaults.set(themeIndex, forKey: "theme")
         defaults.set(volume, forKey: "volume")
