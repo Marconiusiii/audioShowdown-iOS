@@ -55,6 +55,16 @@ final class GameAudioEngine {
         var clicker6Envelope = 0.0
         var clicker7Envelope = 0.0
         var clicker8Envelope = 0.0
+        var transientState1 = 0.0
+        var transientState2 = 0.0
+        var transientState3 = 0.0
+        var transientState4 = 0.0
+        var transientState5 = 0.0
+        var transientState6 = 0.0
+        var transientPrevious1 = 0.0
+        var transientPrevious2 = 0.0
+        var transientPrevious3 = 0.0
+        var transientPrevious4 = 0.0
     }
 
     private let engine = AVAudioEngine()
@@ -753,8 +763,18 @@ final class GameAudioEngine {
                 state.clicker7Envelope *= exp(-1 / (sampleRate * 0.0044))
                 state.clicker8Envelope *= exp(-1 / (sampleRate * 0.0047))
 
-                let bearingA = oscillator(1_450 + Double.random(in: -180...180), phase: &state.tertiaryPhase, waveform: .square)
-                let bearingB = oscillator(2_050 + Double.random(in: -240...240), phase: &state.rattleResonancePhase, waveform: .triangle)
+                let bearingA = highPass(
+                    lowPass(Double.random(in: -1...1), cutoff: 4_200, state: &state.transientState1),
+                    cutoff: 1_450,
+                    state: &state.transientState2,
+                    previousInput: &state.transientPrevious1
+                )
+                let bearingB = highPass(
+                    Double.random(in: -1...1),
+                    cutoff: 2_050,
+                    state: &state.transientState3,
+                    previousInput: &state.transientPrevious2
+                )
                 let bearingC = highPass(
                     lowPass(Double.random(in: -1...1), cutoff: 5_400, state: &state.midState),
                     cutoff: 2_400,
@@ -764,11 +784,21 @@ final class GameAudioEngine {
                 let bearingD = highPass(
                     Double.random(in: -1...1),
                     cutoff: 4_800,
+                    state: &state.transientState4,
+                    previousInput: &state.transientPrevious3
+                )
+                let bearingE = highPass(
+                    lowPass(Double.random(in: -1...1), cutoff: 6_200, state: &state.transientState5),
+                    cutoff: 2_850,
+                    state: &state.transientState6,
+                    previousInput: &state.transientPrevious4
+                )
+                let bearingF = highPass(
+                    Double.random(in: -1...1),
+                    cutoff: 3_600,
                     state: &state.rattleBodyEnvelope,
                     previousInput: &state.subPreviousInput
                 )
-                let bearingE = oscillator(2_850 + Double.random(in: -320...320), phase: &state.primaryPhase, waveform: .square)
-                let bearingF = oscillator(3_600 + Double.random(in: -420...420), phase: &state.secondaryPhase, waveform: .triangle)
                 let bearingG = bearingC * 0.82 + bearingA * 0.18
                 let bearingH = bearingD * 0.86 + bearingB * 0.14
 
