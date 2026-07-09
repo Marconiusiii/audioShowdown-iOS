@@ -20,7 +20,7 @@ struct GameView: View {
     var body: some View {
         let theme = GameTheme.all[settings.themeIndex]
         VStack(spacing: 0) {
-            Text(training ? "Where the Fuck is the Puck?" : "Audio Showdown")
+            Text(training ? "Where the duck is the puck?" : "Audio Showdown")
                 .font(.headline)
                 .foregroundStyle(theme.foreground)
                 .fixedSize(horizontal: false, vertical: true)

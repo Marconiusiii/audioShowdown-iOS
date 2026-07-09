@@ -28,7 +28,7 @@ final class AudioShowdownUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.staticTexts["Audio Showdown, By Chancey Fleet and Marco Salsiccia"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["Start Game"].exists)
-        XCTAssertTrue(app.buttons["Where the Fuck is the Puck?"].exists)
+        XCTAssertTrue(app.buttons["Where the duck is the puck?"].exists)
         XCTAssertFalse(app.staticTexts["About Audio Showdown"].exists)
         app.buttons["How to Play"].tap()
         XCTAssertTrue(app.navigationBars["How to Play"].waitForExistence(timeout: 2))

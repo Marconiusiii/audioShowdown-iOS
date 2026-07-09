@@ -7,11 +7,10 @@ struct SettingsView: View {
     @State private var previewHaptics = GameHapticsEngine()
 
     private let puckSounds = ["Woodblock", "Marimba", "Tick", "Sine beep", "Square beep", "Pluck", "Cowbell", "Clave", "Water drop", "Sonar ping", "Piano", "Chime", "Glass", "Tom", "Laser"]
-    private let smoothPuckSounds = ["Low Synth", "Bright Hum", "Table Roll", "Showdown Ball", "Bearing Roll", "Gentle Jingle", "Warm Buzz"]
-    private let pitchNames = ["Pitch off", "Subtle", "Strong"]
+    private let smoothPuckSounds = ["Warm Tone", "Bell Tone", "Tick Tone", "Showdown Ball", "Sine Tone", "Square Tone", "Pluck Tone", "Cowbell Tone", "Clave Tone", "Water Tone", "Sonar Tone", "Piano Tone", "Chime Tone", "Glass Tone", "Laser Tone"]
+    private let pitchNames = ["None", "Subtle", "Strong"]
     private let pulseSpeeds = ["Slow", "Medium", "Fast"]
     private let puckSizes = ["Classic", "Big", "Gigantic"]
-    private let movementSounds = ["Off", "Wood", "Rubber", "Iron", "Gold", "Stone", "Plastic"]
     private let strikeSounds = ["Thock", "Click", "Pop", "Knock", "Snare", "Wood", "Bonk", "Zap", "Boing", "Slap"]
     private let reverbStyles = ["Off", "Small Room", "Arcade Floor", "Showdown Tournament"]
 
@@ -132,14 +131,6 @@ struct SettingsView: View {
                                 selectionChanged: previewPuckSound
                             )
                             AppCategoricalSliderRow(
-                                title: "Pitch Behavior",
-                                choices: pitchNames,
-                                selection: $settings.pitchBehavior,
-                                theme: theme,
-                                selectionChanged: { _ in previewPuckSound(settings.puckSound) }
-                            )
-                            AppToggleRow(title: "Lower Pitch When Closer", isOn: $settings.lowerPitchWhenCloser, theme: theme)
-                            AppCategoricalSliderRow(
                                 title: "Pulse Speed",
                                 choices: pulseSpeeds,
                                 selection: $settings.pingRate,
@@ -158,21 +149,28 @@ struct SettingsView: View {
                                 theme: theme,
                                 selectionChanged: previewSmoothPuckSound
                             )
-                            VStack(spacing: 0) {
-                                Picker("Distance Behavior", selection: $settings.puckDistanceBehavior) {
-                                    ForEach(PuckDistanceBehavior.allCases) { behavior in
-                                        Text(behavior.rawValue).tag(behavior)
-                                    }
-                                }
-                                .pickerStyle(.segmented)
-                                .tint(theme.accent)
-                            }
-                            .frame(maxWidth: .infinity, minHeight: 60)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 10)
-                            .background(theme.background)
-                            .contentShape(Rectangle())
-                            AppToggleRow(title: closerFeedbackTitle, isOn: $settings.closerIncreasesPuckFeedback, theme: theme)
+                        }
+                        AppToggleRow(
+                            title: "Volume Changes With Distance",
+                            isOn: $settings.volumeChangesWithDistance,
+                            theme: theme
+                        )
+                        if !isSmoothShowdownBallSelected {
+                            AppToggleRow(
+                                title: "Pitch Changes With Distance",
+                                isOn: $settings.pitchChangesWithDistance,
+                                theme: theme
+                            )
+                        }
+                        if settings.pitchChangesWithDistance && !isSmoothShowdownBallSelected {
+                            AppCategoricalSliderRow(
+                                title: "Pitch Amount",
+                                choices: pitchNames,
+                                selection: $settings.pitchBehavior,
+                                theme: theme,
+                                selectionChanged: { _ in previewCurrentPuckSound() }
+                            )
+                            AppToggleRow(title: "Lower Pitch When Closer", isOn: $settings.lowerPitchWhenCloser, theme: theme)
                         }
                         AppToggleRow(title: "Center Crossing Sound", isOn: $settings.centerCrossingSound, theme: theme)
                         AppAdjustableSliderRow(
@@ -192,17 +190,7 @@ struct SettingsView: View {
                             value: $settings.malletSlideVolume,
                             range: 0...1,
                             step: 0.05,
-                            theme: theme,
-                            valueChanged: { value in
-                                audioEngine.updateMalletSlide(style: settings.movementSound, x: 0.5, speed: 700, volume: value)
-                            }
-                        )
-                        AppCategoricalSliderRow(
-                            title: "Mallet Material",
-                            choices: movementSounds,
-                            selection: $settings.movementSound,
-                            theme: theme,
-                            selectionChanged: previewMovementSound
+                            theme: theme
                         )
                         AppCategoricalSliderRow(
                             title: "Strike Sound",
@@ -239,6 +227,11 @@ struct SettingsView: View {
         .onAppear {
             audioEngine.warmUp(volume: settings.volume, reverbStyle: settings.reverbStyle, puckVolume: settings.puckVolume)
         }
+        .onChange(of: settings.pitchChangesWithDistance) { _, enabled in
+            if enabled, settings.pitchBehavior == 0 {
+                settings.pitchBehavior = 1
+            }
+        }
     }
 
     private func previewPuckSound(_ index: Int) {
@@ -247,7 +240,9 @@ struct SettingsView: View {
             distance: 0.4,
             style: index,
             pitchBehavior: settings.pitchBehavior,
-            lowerWhenCloser: settings.lowerPitchWhenCloser
+            pitchChangesWithDistance: settings.pitchChangesWithDistance,
+            lowerWhenCloser: settings.lowerPitchWhenCloser,
+            volumeChangesWithDistance: settings.volumeChangesWithDistance
         )
     }
 
@@ -258,8 +253,10 @@ struct SettingsView: View {
             proximity: 0.75,
             speed: 900,
             volume: settings.puckVolume,
-            distanceBehavior: settings.puckDistanceBehavior,
-            closerIncreases: settings.closerIncreasesPuckFeedback
+            pitchBehavior: settings.pitchBehavior,
+            pitchChangesWithDistance: settings.pitchChangesWithDistance,
+            lowerWhenCloser: settings.lowerPitchWhenCloser,
+            volumeChangesWithDistance: settings.volumeChangesWithDistance
         )
     }
 
@@ -271,24 +268,17 @@ struct SettingsView: View {
         }
     }
 
-    private func previewMovementSound(_ index: Int) {
-        guard index > 0 else { return }
-        audioEngine.updateMalletSlide(style: index, x: 0.5, speed: 700, volume: settings.malletSlideVolume)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
-            audioEngine.stopMalletSlide()
-        }
-    }
-
     private func previewStrikeSound(_ index: Int) {
         audioEngine.strike(style: index, x: 0.5)
     }
 
     private func previewReverb(_ index: Int) {
+        audioEngine.stopSmoothPuck()
         audioEngine.setReverb(index)
-        previewCurrentPuckSound()
+        audioEngine.reverbAudition()
     }
 
-    private var closerFeedbackTitle: String {
-        settings.puckDistanceBehavior == .volume ? "Closer Means Louder" : "Closer Means Higher"
+    private var isSmoothShowdownBallSelected: Bool {
+        settings.puckTrackingStyle == .smooth && settings.smoothPuckSound == 3
     }
 }

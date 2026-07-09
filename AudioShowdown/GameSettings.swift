@@ -32,6 +32,8 @@ final class GameSettings: ObservableObject {
     @Published var smoothPuckSound: Int { didSet { save() } }
     @Published var puckDistanceBehavior: PuckDistanceBehavior { didSet { save() } }
     @Published var closerIncreasesPuckFeedback: Bool { didSet { save() } }
+    @Published var volumeChangesWithDistance: Bool { didSet { save() } }
+    @Published var pitchChangesWithDistance: Bool { didSet { save() } }
     @Published var pitchBehavior: Int { didSet { save() } }
     @Published var lowerPitchWhenCloser: Bool { didSet { save() } }
     @Published var pingRate: Int { didSet { save() } }
@@ -55,9 +57,16 @@ final class GameSettings: ObservableObject {
         puckSize = Self.clamp(defaults.object(forKey: "puckSize") as? Int ?? 0, 0...2)
         puckTrackingStyle = PuckTrackingStyle(rawValue: defaults.string(forKey: "puckTrackingStyle") ?? "") ?? .pulse
         puckSound = Self.clamp(defaults.object(forKey: "puckSound") as? Int ?? 0, 0...14)
-        smoothPuckSound = Self.clamp(defaults.object(forKey: "smoothPuckSound") as? Int ?? 3, 0...6)
+        smoothPuckSound = Self.clamp(defaults.object(forKey: "smoothPuckSound") as? Int ?? 3, 0...14)
         puckDistanceBehavior = PuckDistanceBehavior(rawValue: defaults.string(forKey: "puckDistanceBehavior") ?? "") ?? .volume
         closerIncreasesPuckFeedback = defaults.object(forKey: "closerIncreasesPuckFeedback") as? Bool ?? true
+        volumeChangesWithDistance = defaults.object(forKey: "volumeChangesWithDistance") as? Bool ?? true
+        pitchChangesWithDistance = defaults.object(forKey: "pitchChangesWithDistance") as? Bool ?? {
+            if let storedBehavior = defaults.string(forKey: "puckDistanceBehavior") {
+                return storedBehavior == PuckDistanceBehavior.pitch.rawValue
+            }
+            return false
+        }()
         pitchBehavior = Self.clamp(defaults.object(forKey: "pitchBehavior") as? Int ?? 0, 0...2)
         lowerPitchWhenCloser = defaults.bool(forKey: "lowerPitch")
         let savedPulseVersion = defaults.integer(forKey: "pulseSettingsVersion")
@@ -100,6 +109,8 @@ final class GameSettings: ObservableObject {
         defaults.set(smoothPuckSound, forKey: "smoothPuckSound")
         defaults.set(puckDistanceBehavior.rawValue, forKey: "puckDistanceBehavior")
         defaults.set(closerIncreasesPuckFeedback, forKey: "closerIncreasesPuckFeedback")
+        defaults.set(volumeChangesWithDistance, forKey: "volumeChangesWithDistance")
+        defaults.set(pitchChangesWithDistance, forKey: "pitchChangesWithDistance")
         defaults.set(pitchBehavior, forKey: "pitchBehavior")
         defaults.set(lowerPitchWhenCloser, forKey: "lowerPitch")
         defaults.set(pingRate, forKey: "pingRate")

@@ -15,8 +15,8 @@ final class GameModel: ObservableObject {
     static let puckSpeedCap = 2_150.0
     private static let friction = 0.06
     private static let wallRestitution = 0.97
-    private static let deadVerticalSpeed = 70.0
-    private static let deadSpeed = 140.0
+    private static let deadVerticalSpeed = 105.0
+    private static let deadSpeed = 190.0
     let settings: GameSettings
     let audio: GameAudioEngine
     let haptics = GameHapticsEngine()
@@ -37,6 +37,7 @@ final class GameModel: ObservableObject {
     private var tapCount = 0
     private var lastTapTime: TimeInterval = 0
     private var pendingGameOverRestart: DispatchWorkItem?
+    private var pendingGameOverAnnouncement: DispatchWorkItem?
     private var placingPuck = false
     private var playerAirHockeyServeCount = 1
     private var computerAirHockeyServeCount = 0
@@ -48,6 +49,7 @@ final class GameModel: ObservableObject {
     private var progressTime: TimeInterval = 0
     private var previousTrainingPoint: CGPoint?
     private var previousTrainingMoveTime: TimeInterval?
+    private var phaseBeforePause: Phase?
     private let training: Bool
 
     var isPaused: Bool { phase == .paused }
@@ -192,9 +194,13 @@ final class GameModel: ObservableObject {
             puck.vy = 0
             previousTrainingPoint = clamped
             previousTrainingMoveTime = Date.timeIntervalSinceReferenceDate
+            lastCenterSide = puck.y < Self.center ? -1 : 1
             return
         }
         guard phase == .waitingForServe || phase == .placedServe || phase == .live else { return }
+        if (phase == .waitingForServe || phase == .placedServe), point.y < Self.center {
+            return
+        }
         if phase == .waitingForServe {
             if server == .player {
                 puck = Disc(x: clamp(point.x, puckRadius, Self.width - puckRadius), y: clamp(point.y, Self.center + puckRadius, Self.height - puckRadius))
@@ -214,6 +220,7 @@ final class GameModel: ObservableObject {
 
     func touchMoved(to point: CGPoint) {
         if phase == .training {
+            let previousY = puck.y
             let clamped = CGPoint(
                 x: clamp(Double(point.x), puckRadius, Self.width - puckRadius),
                 y: clamp(Double(point.y), puckRadius, Self.height - puckRadius)
@@ -230,6 +237,7 @@ final class GameModel: ObservableObject {
             }
             puck.x = clamped.x
             puck.y = clamped.y
+            detectTrainingCenterCrossing(previousY: previousY)
             previousTrainingPoint = clamped
             previousTrainingMoveTime = now
             return
@@ -238,7 +246,7 @@ final class GameModel: ObservableObject {
         movePlayer(to: point)
     }
 
-    func touchEnded(wasTap: Bool) {
+    func touchEnded(wasTap: Bool, at point: CGPoint) {
         audio.stopMalletSlide()
         let wasPlacingPuck = placingPuck
         placingPuck = false
@@ -247,10 +255,15 @@ final class GameModel: ObservableObject {
         let window = phase == .gameOver || phase == .training ? 0.65 : 0.4
         tapCount = now - lastTapTime < window ? tapCount + 1 : 1
         lastTapTime = now
-        if phase == .gameOver {
+        if (phase == .waitingForServe || phase == .placedServe), point.y < Self.center, tapCount >= 2 {
+            togglePause()
+            tapCount = 0
+        } else if phase == .gameOver {
             if tapCount >= 3 {
                 pendingGameOverRestart?.cancel()
                 pendingGameOverRestart = nil
+                pendingGameOverAnnouncement?.cancel()
+                pendingGameOverAnnouncement = nil
                 tapCount = 0
                 NotificationCenter.default.post(name: .gameOverReturnHome, object: nil)
             } else if tapCount == 2 {
@@ -261,10 +274,16 @@ final class GameModel: ObservableObject {
     }
 
     func togglePause() {
-        guard phase == .live || phase == .paused else { return }
+        guard phase == .waitingForServe || phase == .placedServe || phase == .live || phase == .paused else { return }
         audio.stopMalletSlide()
         audio.stopSmoothPuck()
-        phase = phase == .paused ? .live : .paused
+        if phase == .paused {
+            phase = phaseBeforePause ?? .live
+            phaseBeforePause = nil
+        } else {
+            phaseBeforePause = phase
+            phase = .paused
+        }
         previousTime = nil
         announce(phase == .paused ? "Game paused. Settings are available." : "Game resumed.")
     }
@@ -277,8 +296,11 @@ final class GameModel: ObservableObject {
     func restart() {
         pendingGameOverRestart?.cancel()
         pendingGameOverRestart = nil
+        pendingGameOverAnnouncement?.cancel()
+        pendingGameOverAnnouncement = nil
         playerScore = 0; opponentScore = 0; server = .player; serveNumber = 1
         playerAirHockeyServeCount = 1; computerAirHockeyServeCount = 0
+        phaseBeforePause = nil
         puck = Disc(x: 300, y: 600); phase = .waitingForServe; previousTime = nil
         resetPuckRecoveryState()
         announce(serveAnnouncement)
@@ -299,8 +321,8 @@ final class GameModel: ObservableObject {
             resolvePlayerDirectContact()
         }
         let movementSpeed = hypot(playerMallet.vx, playerMallet.vy)
-        if settings.movementSound > 0, movementSpeed > 60 {
-            audio.updateMalletSlide(style: settings.movementSound, x: next.x / Self.width, speed: movementSpeed, volume: settings.malletSlideVolume)
+        if movementSpeed > 60 {
+            audio.updateMalletSlide(x: next.x / Self.width, speed: movementSpeed, volume: settings.malletSlideVolume)
         } else {
             audio.stopMalletSlide()
         }
@@ -499,10 +521,11 @@ final class GameModel: ObservableObject {
             progressTime = now
             return
         }
+        let creeping = speed < 260 && abs(puck.vy) < 155
         let stalled = speed < Self.deadSpeed
         let tooLateral = abs(puck.vy) < Self.deadVerticalSpeed
-        guard stalled || tooLateral else { return }
-        let delay = stalled ? 1.2 : 2.5
+        guard stalled || tooLateral || creeping else { return }
+        let delay = creeping ? 0.85 : (stalled ? 0.95 : 1.35)
         guard now - progressTime >= delay else { return }
         let recoveryHitByPlayer = lastHitByPlayer ?? (puck.y >= Self.center)
         let recovered = Self.recoveredPuckVelocity(vx: puck.vx, vy: puck.vy, byPlayer: recoveryHitByPlayer)
@@ -523,6 +546,13 @@ final class GameModel: ObservableObject {
         }
     }
 
+    private func detectTrainingCenterCrossing(previousY: Double) {
+        guard settings.centerCrossingSound else { return }
+        let crossed = (previousY < Self.center && puck.y >= Self.center) || (previousY > Self.center && puck.y <= Self.center)
+        guard crossed else { return }
+        audio.centerCrossing(volume: settings.centerCrossingVolume)
+    }
+
     private func detectGoal() {
         if puck.y < -puckRadius, abs(puck.x - 300) < Self.goalHalfWidth { score(player: true) }
         else if puck.y > Self.height + puckRadius, abs(puck.x - 300) < Self.goalHalfWidth { score(player: false) }
@@ -535,10 +565,14 @@ final class GameModel: ObservableObject {
         if hasWinner {
             phase = .gameOver
             audio.stopSmoothPuck()
-            if playerScore > opponentScore { audio.matchWon() }
+            let playerWon = playerScore > opponentScore
+            if playerWon { audio.matchWon() }
             else { audio.matchLost() }
             haptics.play(.gameOver, level: settings.haptics)
-            announce("\(playerScore > opponentScore ? "You win!" : "Computer wins.") Final score, \(scoreText). Double-tap the table to play again. Triple-tap to return home.")
+            scheduleGameOverAnnouncement(
+                "\(playerWon ? "You win!" : "Computer wins.") Final score, \(scoreText). Double-tap the table to play again. Triple-tap to return home.",
+                delay: playerWon ? 1.45 : 1.15
+            )
         } else {
             audio.goal(playerScored: player)
             audio.stopSmoothPuck()
@@ -559,12 +593,16 @@ final class GameModel: ObservableObject {
         if hasWinner {
             phase = .gameOver
             haptics.play(.gameOver, level: settings.haptics)
+            let playerWon = playerScore > opponentScore
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { [weak self] in
                 guard let self, self.phase == .gameOver else { return }
-                if self.playerScore > self.opponentScore { self.audio.matchWon() }
+                if playerWon { self.audio.matchWon() }
                 else { self.audio.matchLost() }
             }
-            announce("Board Ball. \(againstPlayer ? "Computer" : "You") wins. Final score, \(scoreText). Double-tap the table to play again. Triple-tap to return home.")
+            scheduleGameOverAnnouncement(
+                "Board Ball. \(againstPlayer ? "Computer" : "You") wins. Final score, \(scoreText). Double-tap the table to play again. Triple-tap to return home.",
+                delay: playerWon ? 1.75 : 1.45
+            )
         } else {
             phase = .waitingForServe
             announce("Board Ball. \(againstPlayer ? "Computer" : "You") scores one point. \(serveAnnouncement)")
@@ -608,8 +646,10 @@ final class GameModel: ObservableObject {
                 proximity: proximity,
                 speed: hypot(puck.vx, puck.vy),
                 volume: settings.puckVolume,
-                distanceBehavior: settings.puckDistanceBehavior,
-                closerIncreases: settings.closerIncreasesPuckFeedback
+                pitchBehavior: settings.pitchBehavior,
+                pitchChangesWithDistance: settings.pitchChangesWithDistance,
+                lowerWhenCloser: settings.lowerPitchWhenCloser,
+                volumeChangesWithDistance: settings.volumeChangesWithDistance
             )
             return
         }
@@ -621,7 +661,15 @@ final class GameModel: ObservableObject {
             proximity: proximity
         )
         nextPingTime = now + max(0.055, base)
-        audio.puckPing(x: puck.x / Self.width, distance: proximity, style: settings.puckSound, pitchBehavior: settings.pitchBehavior, lowerWhenCloser: settings.lowerPitchWhenCloser)
+        audio.puckPing(
+            x: puck.x / Self.width,
+            distance: proximity,
+            style: settings.puckSound,
+            pitchBehavior: settings.pitchBehavior,
+            pitchChangesWithDistance: settings.pitchChangesWithDistance,
+            lowerWhenCloser: settings.lowerPitchWhenCloser,
+            volumeChangesWithDistance: settings.volumeChangesWithDistance
+        )
     }
 
     private func scheduleGameOverRestart() {
@@ -633,6 +681,16 @@ final class GameModel: ObservableObject {
         }
         pendingGameOverRestart = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
+    }
+
+    private func scheduleGameOverAnnouncement(_ text: String, delay: TimeInterval) {
+        pendingGameOverAnnouncement?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.phase == .gameOver else { return }
+            self.announce(text)
+        }
+        pendingGameOverAnnouncement = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
     private var hasWinner: Bool {

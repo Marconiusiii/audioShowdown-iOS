@@ -34,17 +34,23 @@ struct AudioShowdownTests {
         #expect(settings.smoothPuckSound == 3)
         #expect(settings.puckDistanceBehavior == .volume)
         #expect(settings.closerIncreasesPuckFeedback)
+        #expect(settings.volumeChangesWithDistance)
+        #expect(!settings.pitchChangesWithDistance)
 
         settings.puckTrackingStyle = .smooth
         settings.smoothPuckSound = 5
         settings.puckDistanceBehavior = .pitch
         settings.closerIncreasesPuckFeedback = false
+        settings.volumeChangesWithDistance = false
+        settings.pitchChangesWithDistance = true
 
         let restoredSettings = GameSettings(defaults: defaults)
         #expect(restoredSettings.puckTrackingStyle == .smooth)
         #expect(restoredSettings.smoothPuckSound == 5)
         #expect(restoredSettings.puckDistanceBehavior == .pitch)
         #expect(!restoredSettings.closerIncreasesPuckFeedback)
+        #expect(!restoredSettings.volumeChangesWithDistance)
+        #expect(restoredSettings.pitchChangesWithDistance)
     }
 
 
@@ -135,11 +141,29 @@ struct AudioShowdownTests {
         let model = GameModel(settings: GameSettings(defaults: defaults), training: false, audio: GameAudioEngine())
 
         model.touchBegan(at: CGPoint(x: 300, y: 900))
-        model.touchEnded(wasTap: true)
+        model.touchEnded(wasTap: true, at: CGPoint(x: 300, y: 900))
 
         #expect(model.phase == .placedServe)
         #expect(model.puck.vx == 0)
         #expect(model.puck.vy == 0)
+    }
+
+    @Test func upperHalfDoubleTapPausesBeforeServeIsPlaced() {
+        let suiteName = "AudioShowdownTests.ServePause.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = GameModel(settings: GameSettings(defaults: defaults), training: false, audio: GameAudioEngine())
+
+        model.touchBegan(at: CGPoint(x: 300, y: 120))
+        model.touchEnded(wasTap: true, at: CGPoint(x: 300, y: 120))
+        model.touchBegan(at: CGPoint(x: 300, y: 120))
+        model.touchEnded(wasTap: true, at: CGPoint(x: 300, y: 120))
+
+        #expect(model.phase == .paused)
+
+        model.togglePause()
+
+        #expect(model.phase == .waitingForServe)
     }
 
     @Test func oldApproachPulseSettingMigratesToMediumWithSpeedup() {

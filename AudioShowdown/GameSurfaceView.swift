@@ -26,8 +26,8 @@ struct GameSurfaceView: View {
                             model.touchMoved(to: point)
                         }
                     }
-                    .onEnded { _ in
-                        model.touchEnded(wasTap: !moved)
+                    .onEnded { value in
+                        model.touchEnded(wasTap: !moved, at: tablePoint(value.location, in: geometry.size))
                         touchStart = nil
                         moved = false
                     }

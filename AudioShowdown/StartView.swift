@@ -33,7 +33,7 @@ struct StartView: View {
                     AppButtonRow(title: "Start Game", theme: theme, prominent: true, action: startGame)
                     AppButtonRow(title: "How to Play", theme: theme) { showingHowToPlay = true }
                     AppButtonRow(title: "Settings", theme: theme) { showingSettings = true }
-                    AppButtonRow(title: "Where the Fuck is the Puck?", theme: theme, action: startTraining)
+                    AppButtonRow(title: "Where the duck is the puck?", theme: theme, action: startTraining)
                 }
                 .frame(maxWidth: .infinity)
             }

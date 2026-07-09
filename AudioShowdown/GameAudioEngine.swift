@@ -85,7 +85,8 @@ final class GameAudioEngine {
     private var malletSlideStyle = -1
     private var smoothPuckStyle = -1
     private var smoothPuckGeneration = 0
-    private var smoothPuckQueuedBuffers = 0
+    private var smoothPuckDryQueuedBuffers = 0
+    private var smoothPuckWetQueuedBuffers = 0
     private var smoothPuckRenderState = SmoothPuckRenderState()
     private var smoothPuckRenderSpeed = 0.0
     private var smoothPuckPitchMultiplier = 1.0
@@ -115,13 +116,7 @@ final class GameAudioEngine {
         engine.mainMixerNode.outputVolume = Float(volume)
         do {
             if !started {
-                let session = AVAudioSession.sharedInstance()
-                try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-                try session.setPreferredSampleRate(sourceFormat.sampleRate)
-                // A 5 ms buffer is too aggressive when debugging tethered from Xcode and can starve VoiceOver speech.
-                // 12 ms keeps gameplay responsive while leaving enough audio scheduling room for assistive audio.
-                try session.setPreferredIOBufferDuration(0.012)
-                try session.setActive(true)
+                try configureAudioSession()
                 engine.prepare()
             }
             if !engine.isRunning { try engine.start() }
@@ -171,11 +166,11 @@ final class GameAudioEngine {
         }
     }
 
-    func puckPing(x: Double, distance proximity: Double, style: Int, pitchBehavior: Int, lowerWhenCloser: Bool) {
+    func puckPing(x: Double, distance proximity: Double, style: Int, pitchBehavior: Int, pitchChangesWithDistance: Bool, lowerWhenCloser: Bool, volumeChangesWithDistance: Bool) {
         let near = clamp(proximity)
-        let pitchAmount = [0.0, 0.6, 1.4][pitchBehavior]
+        let pitchAmount = pitchChangesWithDistance ? [0.0, 0.6, 1.4][pitchBehavior] : 0
         let pitchMultiplier = 1 + pitchAmount * (lowerWhenCloser ? 1 - near : near)
-        let gain = min(1, 0.30 + 0.70 * near) * puckVolume
+        let gain = min(1, volumeChangesWithDistance ? 0.74 + 0.30 * near : 0.92) * puckVolume
         let tones: [Tone]
         let noises: [Noise]
 
@@ -193,10 +188,16 @@ final class GameAudioEngine {
             tones = []
             noises = [Noise(duration: 0.02, peak: 0.6, highPass: 3_500 * pitchMultiplier)]
         case 3:
-            tones = [Tone(waveform: .sine, startFrequency: 880 * pitchMultiplier, endFrequency: nil, duration: 0.09, peak: 0.5)]
+            tones = [
+                Tone(waveform: .sine, startFrequency: 880 * pitchMultiplier, endFrequency: nil, duration: 0.10, peak: 0.52),
+                Tone(waveform: .triangle, startFrequency: 440 * pitchMultiplier, endFrequency: nil, duration: 0.08, peak: 0.16)
+            ]
             noises = []
         case 4:
-            tones = [Tone(waveform: .square, startFrequency: 620 * pitchMultiplier, endFrequency: nil, duration: 0.08, peak: 0.32)]
+            tones = [
+                Tone(waveform: .square, startFrequency: 620 * pitchMultiplier, endFrequency: nil, duration: 0.09, peak: 0.34),
+                Tone(waveform: .triangle, startFrequency: 310 * pitchMultiplier, endFrequency: nil, duration: 0.08, peak: 0.12)
+            ]
             noises = []
         case 5:
             tones = [Tone(waveform: .triangle, startFrequency: 540 * pitchMultiplier, endFrequency: 470 * pitchMultiplier, duration: 0.13, peak: 0.5)]
@@ -214,7 +215,11 @@ final class GameAudioEngine {
             tones = [Tone(waveform: .sine, startFrequency: 1_300 * pitchMultiplier, endFrequency: 480 * pitchMultiplier, duration: 0.16, peak: 0.5)]
             noises = []
         case 9:
-            tones = [Tone(waveform: .sine, startFrequency: 990 * pitchMultiplier, endFrequency: 1_080 * pitchMultiplier, duration: 0.3, peak: 0.45)]
+            tones = [
+                Tone(waveform: .sine, startFrequency: 760 * pitchMultiplier, endFrequency: 890 * pitchMultiplier, duration: 0.30, peak: 0.56),
+                Tone(waveform: .triangle, startFrequency: 190 * pitchMultiplier, endFrequency: 220 * pitchMultiplier, duration: 0.30, peak: 0.20),
+                Tone(waveform: .sine, startFrequency: 1_520 * pitchMultiplier, endFrequency: 1_780 * pitchMultiplier, duration: 0.16, peak: 0.12)
+            ]
             noises = []
         case 10:
             let frequency = pentatonicFrequency(near: near, pitchBehavior: pitchBehavior, lowerWhenCloser: lowerWhenCloser)
@@ -242,7 +247,10 @@ final class GameAudioEngine {
             tones = [Tone(waveform: .sine, startFrequency: 190 * pitchMultiplier, endFrequency: 95 * pitchMultiplier, duration: 0.18, peak: 0.55)]
             noises = [Noise(duration: 0.04, peak: 0.12, lowPass: 500)]
         default:
-            tones = [Tone(waveform: .sawtooth, startFrequency: 1_400 * pitchMultiplier, endFrequency: 320 * pitchMultiplier, duration: 0.16, peak: 0.4)]
+            tones = [
+                Tone(waveform: .sawtooth, startFrequency: 1_050 * pitchMultiplier, endFrequency: 520 * pitchMultiplier, duration: 0.18, peak: 0.54),
+                Tone(waveform: .sine, startFrequency: 520 * pitchMultiplier, endFrequency: 360 * pitchMultiplier, duration: 0.16, peak: 0.24)
+            ]
             noises = []
         }
 
@@ -251,57 +259,74 @@ final class GameAudioEngine {
         playPuck(buffer, x: x, proximity: near)
     }
 
-    func updateSmoothPuck(style: Int, x: Double, proximity: Double, speed: Double, volume: Double, distanceBehavior: PuckDistanceBehavior, closerIncreases: Bool) {
+    func updateSmoothPuck(style: Int, x: Double, proximity: Double, speed: Double, volume: Double, pitchBehavior: Int, pitchChangesWithDistance: Bool, lowerWhenCloser: Bool, volumeChangesWithDistance: Bool) {
         guard volume > 0 else {
             stopSmoothPuck()
             return
         }
-        if !engine.isRunning { try? engine.start() }
+        guard ensureEngineRunning() else {
+            stopSmoothPuck()
+            return
+        }
         smoothPuckRattleEnergy = max(0, smoothPuckRattleEnergy - 0.010)
         let near = clamp(proximity)
-        let distanceFactor = closerIncreases ? near : 1 - near
         smoothPuckRenderSpeed = speed
-        smoothPuckPitchMultiplier = distanceBehavior == .pitch && style != 3 && style != 5 ? 0.82 + 0.36 * distanceFactor : 1
+        let pitchAmount = pitchChangesWithDistance && style != 3 ? [0.0, 0.25, 0.5][pitchBehavior] : 0
+        smoothPuckPitchMultiplier = 1 + pitchAmount * (lowerWhenCloser ? 1 - near : near)
 
         if style != smoothPuckStyle || !smoothPuckVoice.dryPlayer.isPlaying {
             smoothPuckGeneration += 1
             smoothPuckStyle = style
-            smoothPuckQueuedBuffers = 0
+            smoothPuckDryQueuedBuffers = 0
+            smoothPuckWetQueuedBuffers = 0
             smoothPuckRenderState = SmoothPuckRenderState()
             smoothPuckVoice.dryPlayer.stop()
             smoothPuckVoice.wetPlayer.stop()
             primeSmoothPuckQueue(generation: smoothPuckGeneration)
-            smoothPuckVoice.dryPlayer.play()
-            if reverbStyle > 0 { smoothPuckVoice.wetPlayer.play() }
+            if smoothPuckDryQueuedBuffers > 0 {
+                smoothPuckVoice.dryPlayer.play()
+            }
+            if reverbStyle > 0, smoothPuckWetQueuedBuffers > 0 {
+                smoothPuckVoice.wetPlayer.play()
+            }
         } else if reverbStyle > 0, !smoothPuckVoice.wetPlayer.isPlaying {
             smoothPuckGeneration += 1
-            smoothPuckQueuedBuffers = 0
+            smoothPuckDryQueuedBuffers = 0
+            smoothPuckWetQueuedBuffers = 0
             smoothPuckRenderState = SmoothPuckRenderState()
             smoothPuckVoice.dryPlayer.stop()
             smoothPuckVoice.wetPlayer.stop()
             primeSmoothPuckQueue(generation: smoothPuckGeneration)
-            smoothPuckVoice.dryPlayer.play()
-            smoothPuckVoice.wetPlayer.play()
+            if smoothPuckDryQueuedBuffers > 0 {
+                smoothPuckVoice.dryPlayer.play()
+            }
+            if smoothPuckWetQueuedBuffers > 0 {
+                smoothPuckVoice.wetPlayer.play()
+            }
         } else if reverbStyle == 0, smoothPuckVoice.wetPlayer.isPlaying {
             smoothPuckVoice.wetPlayer.stop()
+            smoothPuckWetQueuedBuffers = 0
         }
         primeSmoothPuckQueue(generation: smoothPuckGeneration)
-        let baseGain = distanceBehavior == .volume ? 0.78 + 0.18 * distanceFactor : 0.84
+        let baseGain = volumeChangesWithDistance ? 0.86 + 0.14 * near : 0.94
         let gain = Float(baseGain * clamp(volume))
         let position = smoothTrackingPosition(x: x, proximity: near)
+        let pan = puckTrackingPan(x: x)
         smoothPuckVoice.dryPlayer.position = position
         smoothPuckVoice.wetPlayer.position = position
+        smoothPuckVoice.dryPlayer.pan = pan
+        smoothPuckVoice.wetPlayer.pan = pan
         smoothPuckVoice.dryPlayer.volume = gain
         smoothPuckVoice.wetPlayer.volume = gain
     }
 
-    func previewSmoothPuck(style: Int, x: Double, proximity: Double, speed: Double, volume: Double, distanceBehavior: PuckDistanceBehavior, closerIncreases: Bool) {
+    func previewSmoothPuck(style: Int, x: Double, proximity: Double, speed: Double, volume: Double, pitchBehavior: Int, pitchChangesWithDistance: Bool, lowerWhenCloser: Bool, volumeChangesWithDistance: Bool) {
         stopSmoothPuck()
         guard volume > 0 else { return }
-        if !engine.isRunning { try? engine.start() }
+        guard ensureEngineRunning() else { return }
         let near = clamp(proximity)
-        let distanceFactor = closerIncreases ? near : 1 - near
-        let pitchMultiplier = distanceBehavior == .pitch && style != 3 && style != 5 ? 0.82 + 0.36 * distanceFactor : 1
+        let pitchAmount = pitchChangesWithDistance && style != 3 ? [0.0, 0.25, 0.5][pitchBehavior] : 0
+        let pitchMultiplier = 1 + pitchAmount * (lowerWhenCloser ? 1 - near : near)
         let previewRattleEnergy = style == 3 ? 1.0 : 0.12
         var previewState = SmoothPuckRenderState()
         let buffer = renderSmoothPuckBuffer(
@@ -322,12 +347,22 @@ final class GameAudioEngine {
         if smoothPuckVoice.wetPlayer.isPlaying { smoothPuckVoice.wetPlayer.stop() }
         smoothPuckStyle = -1
         smoothPuckGeneration += 1
-        smoothPuckQueuedBuffers = 0
+        smoothPuckDryQueuedBuffers = 0
+        smoothPuckWetQueuedBuffers = 0
         smoothPuckRenderState = SmoothPuckRenderState()
     }
 
     func energizeSmoothPuck(amount: Double) {
         smoothPuckRattleEnergy = clamp(smoothPuckRattleEnergy + amount)
+    }
+
+    func reverbAudition() {
+        let tones = [
+            Tone(waveform: .triangle, startFrequency: 520, endFrequency: 280, duration: 0.08, peak: 0.46),
+            Tone(waveform: .sine, startFrequency: 1_040, endFrequency: 620, duration: 0.06, peak: 0.20)
+        ]
+        let noises = [Noise(duration: 0.035, peak: 0.32, highPass: 1_800)]
+        playEffect(render(tones: tones, noises: noises, gain: 0.68), x: 0.5, proximity: 0.62)
     }
 
     func strike(style: Int, x: Double, byPlayer: Bool = true) {
@@ -369,17 +404,20 @@ final class GameAudioEngine {
         playEffect(render(tones: tones, noises: noises, gain: baseGain), x: x, proximity: byPlayer ? 0.9 : 0.15)
     }
 
-    func updateMalletSlide(style: Int, x: Double, speed: Double, volume: Double) {
-        guard style > 0, speed > 0, volume > 0 else {
+    func updateMalletSlide(x: Double, speed: Double, volume: Double) {
+        guard speed > 0, volume > 0 else {
             stopMalletSlide()
             return
         }
-        if !engine.isRunning { try? engine.start() }
+        guard ensureEngineRunning() else {
+            stopMalletSlide()
+            return
+        }
         let gain = Float((0.025 + 0.30 * clamp(speed / 1_400)) * clamp(volume))
         let position = spatialPosition(x: x, proximity: 0.95)
-        if style != malletSlideStyle || !malletSlideVoice.dryPlayer.isPlaying {
-            malletSlideStyle = style
-            let buffer = renderMalletSlideLoop(style: style)
+        if malletSlideStyle != 1 || !malletSlideVoice.dryPlayer.isPlaying {
+            malletSlideStyle = 1
+            let buffer = renderMalletSlideLoop()
             malletSlideVoice.dryPlayer.stop()
             malletSlideVoice.dryPlayer.scheduleBuffer(buffer, at: nil, options: .loops)
             malletSlideVoice.dryPlayer.play()
@@ -387,7 +425,7 @@ final class GameAudioEngine {
             malletSlideVoice.wetPlayer.scheduleBuffer(buffer, at: nil, options: .loops)
             if reverbStyle > 0 { malletSlideVoice.wetPlayer.play() }
         } else if reverbStyle > 0, !malletSlideVoice.wetPlayer.isPlaying {
-            let buffer = renderMalletSlideLoop(style: style)
+            let buffer = renderMalletSlideLoop()
             malletSlideVoice.wetPlayer.scheduleBuffer(buffer, at: nil, options: .loops)
             malletSlideVoice.wetPlayer.play()
         } else if reverbStyle == 0, malletSlideVoice.wetPlayer.isPlaying {
@@ -517,16 +555,61 @@ final class GameAudioEngine {
         engine.attach(voice.wetPlayer)
         engine.connect(voice.dryPlayer, to: dryEnvironment, format: sourceFormat)
         engine.connect(voice.wetPlayer, to: wetEnvironment, format: sourceFormat)
+        voice.dryPlayer.sourceMode = .spatializeIfMono
         voice.dryPlayer.renderingAlgorithm = .HRTFHQ
         voice.dryPlayer.reverbBlend = 0
+        voice.wetPlayer.sourceMode = .spatializeIfMono
         voice.wetPlayer.renderingAlgorithm = .HRTFHQ
         voice.wetPlayer.reverbBlend = 100
     }
 
+    private func ensureEngineRunning() -> Bool {
+        if engine.isRunning { return true }
+        do {
+            if !started {
+                try configureAudioSession()
+                engine.prepare()
+            }
+            try engine.start()
+            started = true
+            return true
+        } catch {
+            started = false
+            return false
+        }
+    }
+
+    private func configureAudioSession() throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        try session.setPreferredSampleRate(sourceFormat.sampleRate)
+        // A 5 ms buffer is too aggressive when debugging tethered from Xcode and can starve VoiceOver speech.
+        // 12 ms keeps gameplay responsive while leaving enough audio scheduling room for assistive audio.
+        try session.setPreferredIOBufferDuration(0.012)
+        try session.setActive(true)
+    }
+
     private func playPuck(_ buffer: AVAudioPCMBuffer, x: Double, proximity: Double) {
+        guard ensureEngineRunning() else { return }
         let voice = puckVoices[nextPuckVoice]
         nextPuckVoice = (nextPuckVoice + 1) % puckVoices.count
-        play(buffer, on: voice, x: x, proximity: proximity)
+        let position = puckTrackingPosition(x: x, proximity: proximity)
+        let pan = puckTrackingPan(x: x)
+        if voice.dryPlayer.isPlaying { voice.dryPlayer.stop() }
+        voice.dryPlayer.position = position
+        voice.dryPlayer.pan = pan
+        voice.dryPlayer.volume = 1
+        voice.dryPlayer.scheduleBuffer(buffer)
+        voice.dryPlayer.play()
+
+        if reverbStyle > 0 {
+            if voice.wetPlayer.isPlaying { voice.wetPlayer.stop() }
+            voice.wetPlayer.position = position
+            voice.wetPlayer.pan = pan
+            voice.wetPlayer.volume = 1
+            voice.wetPlayer.scheduleBuffer(buffer)
+            voice.wetPlayer.play()
+        }
     }
 
     private func playEffect(_ buffer: AVAudioPCMBuffer, x: Double, proximity: Double) {
@@ -536,7 +619,7 @@ final class GameAudioEngine {
     }
 
     private func play(_ buffer: AVAudioPCMBuffer, on voice: SpatialVoice, x: Double, proximity: Double) {
-        if !engine.isRunning { try? engine.start() }
+        guard ensureEngineRunning() else { return }
         let position = spatialPosition(x: x, proximity: proximity)
         if voice.dryPlayer.isPlaying { voice.dryPlayer.stop() }
         voice.dryPlayer.position = position
@@ -559,7 +642,7 @@ final class GameAudioEngine {
         environment.distanceAttenuationParameters.distanceAttenuationModel = .inverse
         environment.distanceAttenuationParameters.referenceDistance = 0.8
         environment.distanceAttenuationParameters.maximumDistance = 30
-        environment.distanceAttenuationParameters.rolloffFactor = 0.6
+        environment.distanceAttenuationParameters.rolloffFactor = 0.35
     }
 
     private func spatialPosition(x: Double, proximity: Double) -> AVAudio3DPoint {
@@ -568,13 +651,23 @@ final class GameAudioEngine {
         return AVAudio3DPoint(x: horizontal, y: 0, z: depth)
     }
 
-    private func smoothTrackingPosition(x: Double, proximity: Double) -> AVAudio3DPoint {
-        let horizontal = Float((clamp(x) - 0.5) * 4.0)
-        let depth = Float(-(0.75 + (1 - clamp(proximity)) * 1.6))
+    private func puckTrackingPosition(x: Double, proximity: Double) -> AVAudio3DPoint {
+        let horizontal = Float((clamp(x) - 0.5) * 56.0)
+        let depth = Float(-(0.30 + (1 - clamp(proximity)) * 3.20))
         return AVAudio3DPoint(x: horizontal, y: 0, z: depth)
     }
 
-    private func renderMalletSlideLoop(style: Int) -> AVAudioPCMBuffer {
+    private func smoothTrackingPosition(x: Double, proximity: Double) -> AVAudio3DPoint {
+        let horizontal = Float((clamp(x) - 0.5) * 56.0)
+        let depth = Float(-(0.30 + (1 - clamp(proximity)) * 3.20))
+        return AVAudio3DPoint(x: horizontal, y: 0, z: depth)
+    }
+
+    private func puckTrackingPan(x: Double) -> Float {
+        Float(min(max((clamp(x) - 0.5) * 12.0, -1), 1))
+    }
+
+    private func renderMalletSlideLoop() -> AVAudioPCMBuffer {
         let duration = 2.0
         let frameCount = Int(duration * sourceFormat.sampleRate)
         let buffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(frameCount))!
@@ -582,9 +675,6 @@ final class GameAudioEngine {
         let samples = buffer.floatChannelData![0]
         let sampleRate = sourceFormat.sampleRate
         var lowState = 0.0
-        var midState = 0.0
-        var highState = 0.0
-        var previousInput = 0.0
 
         func lowPass(_ value: Double, cutoff: Double, state: inout Double) -> Double {
             let alpha = 1 - exp(-2 * Double.pi * cutoff / sampleRate)
@@ -592,40 +682,12 @@ final class GameAudioEngine {
             return state
         }
 
-        func highPass(_ value: Double, cutoff: Double, state: inout Double) -> Double {
-            let alpha = exp(-2 * Double.pi * cutoff / sampleRate)
-            state = alpha * (state + value - previousInput)
-            previousInput = value
-            return state
-        }
-
         for frame in 0..<frameCount {
             let t = Double(frame) / sampleRate
             let noise = Double.random(in: -1...1)
-            let value: Double
-            switch style {
-            case 1: // Wood
-                let grain = lowPass(noise, cutoff: 850, state: &lowState)
-                let chatter = abs(sin(2 * Double.pi * 37 * t)) * 2 - 1
-                value = grain * 0.28 + chatter * 0.045 + sin(2 * Double.pi * 118 * t) * 0.045 + sin(2 * Double.pi * 236 * t) * 0.018
-            case 2: // Rubber
-                let drag = lowPass(noise, cutoff: 260, state: &lowState)
-                let grip = waveformSample(phase: 2 * Double.pi * 54 * t, waveform: .triangle)
-                value = drag * 0.34 + grip * 0.07 + sin(2 * Double.pi * 112 * t) * 0.025
-            case 3: // Iron
-                let scrape = highPass(lowPass(noise, cutoff: 2_200, state: &lowState), cutoff: 320, state: &highState)
-                value = scrape * 0.11 + sin(2 * Double.pi * 430 * t) * 0.052 + sin(2 * Double.pi * 860 * t) * 0.022
-            case 4: // Gold
-                let polish = highPass(lowPass(noise, cutoff: 2_800, state: &lowState), cutoff: 420, state: &highState)
-                value = polish * 0.08 + sin(2 * Double.pi * 660 * t) * 0.05 + sin(2 * Double.pi * 1_320 * t) * 0.017
-            case 5: // Stone
-                let rough = lowPass(noise, cutoff: 620, state: &lowState)
-                let grit = highPass(lowPass(Double.random(in: -1...1), cutoff: 1_400, state: &midState), cutoff: 180, state: &highState)
-                value = rough * 0.25 + grit * 0.09 + waveformSample(phase: 2 * Double.pi * 83 * t, waveform: .triangle) * 0.04
-            default: // Plastic
-                let scrape = highPass(lowPass(noise, cutoff: 1_900, state: &lowState), cutoff: 260, state: &highState)
-                value = scrape * 0.10 + sin(2 * Double.pi * 290 * t) * 0.035 + waveformSample(phase: 2 * Double.pi * 145 * t, waveform: .triangle) * 0.035
-            }
+            let grain = lowPass(noise, cutoff: 850, state: &lowState)
+            let chatter = abs(sin(2 * Double.pi * 37 * t)) * 2 - 1
+            let value = grain * 0.28 + chatter * 0.045 + sin(2 * Double.pi * 118 * t) * 0.045 + sin(2 * Double.pi * 236 * t) * 0.018
             let edgeFrames = Int(0.025 * sampleRate)
             let edgeGain: Double
             if frame < edgeFrames {
@@ -642,7 +704,7 @@ final class GameAudioEngine {
 
     private func primeSmoothPuckQueue(generation: Int) {
         guard generation == smoothPuckGeneration, smoothPuckStyle >= 0 else { return }
-        while smoothPuckQueuedBuffers < 4 {
+        while smoothPuckDryQueuedBuffers < 4 {
             let buffer = renderSmoothPuckBuffer(
                 style: smoothPuckStyle,
                 speed: smoothPuckRenderSpeed,
@@ -651,16 +713,22 @@ final class GameAudioEngine {
                 state: &smoothPuckRenderState,
                 previewEnvelope: false
             )
-            smoothPuckQueuedBuffers += 1
+            smoothPuckDryQueuedBuffers += 1
             smoothPuckVoice.dryPlayer.scheduleBuffer(buffer) { [weak self] in
                 Task { @MainActor [weak self] in
                     guard let self, generation == self.smoothPuckGeneration else { return }
-                    self.smoothPuckQueuedBuffers = max(0, self.smoothPuckQueuedBuffers - 1)
+                    self.smoothPuckDryQueuedBuffers = max(0, self.smoothPuckDryQueuedBuffers - 1)
                     self.primeSmoothPuckQueue(generation: generation)
                 }
             }
             if reverbStyle > 0 {
-                smoothPuckVoice.wetPlayer.scheduleBuffer(buffer)
+                smoothPuckWetQueuedBuffers += 1
+                smoothPuckVoice.wetPlayer.scheduleBuffer(buffer) { [weak self] in
+                    Task { @MainActor [weak self] in
+                        guard let self, generation == self.smoothPuckGeneration else { return }
+                        self.smoothPuckWetQueuedBuffers = max(0, self.smoothPuckWetQueuedBuffers - 1)
+                    }
+                }
             }
         }
     }
@@ -706,24 +774,21 @@ final class GameAudioEngine {
             let noise = Double.random(in: -1...1)
             let value: Double
             switch style {
-            case 0: // Low Synth
-                let fundamental = oscillator((54 + 22 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
-                let octave = oscillator((108 + 44 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase, waveform: .triangle)
-                let movement = oscillator(2.4 + 2.8 * speedFactor, phase: &state.tertiaryPhase)
-                let sub = lowPass(noise, cutoff: 42 + 35 * speedFactor, state: &state.lowState)
-                value = fundamental * 0.070 + octave * 0.026 + movement * 0.010 + sub * 0.035
-            case 1: // Soft Hum
-                let hum = oscillator((92 + 30 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
-                let warmth = oscillator((184 + 60 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase, waveform: .triangle)
-                let drift = oscillator(3.0 + 2.0 * speedFactor, phase: &state.tertiaryPhase)
-                let body = lowPass(noise, cutoff: 65 + 60 * speedFactor, state: &state.lowState)
-                value = hum * 0.055 + warmth * 0.025 + drift * 0.014 + body * 0.030
-            case 2: // Table Roll
-                let roll = oscillator((74 + 42 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .triangle)
-                let wobble = oscillator((31 + 20 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
-                let body = lowPass(noise, cutoff: 115 + 160 * speedFactor, state: &state.lowState)
-                let contact = lowPass(Double.random(in: -1...1), cutoff: 260 + 220 * speedFactor, state: &state.midState)
-                value = roll * 0.042 + wobble * 0.022 + body * 0.065 + contact * 0.020
+            case 0: // Warm Tone
+                let body = oscillator((150 + 28 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let roundness = oscillator((75 + 14 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase, waveform: .triangle)
+                let presence = oscillator((300 + 56 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase)
+                value = body * 0.120 + roundness * 0.050 + presence * 0.026
+            case 1: // Bell Tone
+                let bell = oscillator((330 + 70 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let chime = oscillator((660 + 140 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let shimmer = oscillator(5.2 + 2.2 * speedFactor, phase: &state.tertiaryPhase)
+                value = bell * 0.095 + chime * 0.052 + shimmer * chime * 0.022
+            case 2: // Tick Tone
+                let tick = oscillator((500 + 95 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .square)
+                let body = oscillator((250 + 48 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let softener = lowPass(noise, cutoff: 1_200 + 400 * speedFactor, state: &state.lowState)
+                value = tick * 0.052 + body * 0.070 + softener * 0.012
             case 3: // Showdown Ball
                 let chaos = clamp(rattleEnergy)
                 let movement = 0.35 + 0.65 * speedFactor
@@ -814,28 +879,59 @@ final class GameAudioEngine {
                     + shellTone * 0.010
                     + rotation * 0.004
                     + clicks * 1.35
-            case 4: // Bearing Roll
-                let bearing = oscillator((185 + 70 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
-                let lower = oscillator((92 + 35 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase, waveform: .triangle)
-                let rotation = oscillator(7.0 + 9.0 * speedFactor, phase: &state.tertiaryPhase)
-                let body = lowPass(noise, cutoff: 90 + 110 * speedFactor, state: &state.lowState)
-                let mechanical = oscillator((370 + 90 * speedFactor) * pitchMultiplier, phase: &state.rattleResonancePhase, waveform: .triangle)
-                value = bearing * 0.060 + lower * 0.046 + mechanical * 0.020 + rotation * 0.014 + body * 0.030
-            case 5: // Gentle Jingle
-                let carrier = oscillator(260, phase: &state.primaryPhase)
-                let bell = oscillator(520, phase: &state.secondaryPhase)
-                let sway = oscillator(2.2 + 1.2 * speedFactor, phase: &state.tertiaryPhase)
-                if Double.random(in: 0...1) < (1.5 + 5.0 * speedFactor) / sampleRate {
-                    state.rattleEnvelope += Double.random(in: 0.018...0.060)
-                }
-                state.rattleEnvelope *= exp(-1 / (sampleRate * 0.060))
-                value = carrier * 0.026 + bell * 0.022 + sway * 0.008 + state.rattleEnvelope * bell * 0.055
-            default: // Warm Buzz
-                let buzz = oscillator((118 + 40 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .triangle)
-                let warmth = oscillator((59 + 20 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
-                let pulse = oscillator(3.6 + 3.2 * speedFactor, phase: &state.tertiaryPhase)
-                let body = lowPass(noise, cutoff: 80 + 80 * speedFactor, state: &state.lowState)
-                value = buzz * 0.055 + warmth * 0.035 + pulse * 0.012 + body * 0.026
+            case 4: // Sine Tone
+                let tone = oscillator((430 + 90 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let anchor = oscillator((215 + 45 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let presence = oscillator((860 + 180 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase)
+                value = tone * 0.145 + anchor * 0.046 + presence * 0.020
+            case 5: // Square Tone
+                let square = oscillator((240 + 70 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .square)
+                let rounded = oscillator((120 + 35 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let edge = oscillator((480 + 140 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase, waveform: .triangle)
+                value = square * 0.070 + rounded * 0.074 + edge * 0.022
+            case 6: // Pluck Tone
+                let pluck = oscillator((285 + 65 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .triangle)
+                let overtone = oscillator((570 + 130 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let motion = oscillator(4.0 + 4.0 * speedFactor, phase: &state.tertiaryPhase)
+                value = pluck * 0.095 + overtone * 0.038 + motion * overtone * 0.018
+            case 7: // Cowbell Tone
+                let metalA = oscillator((540 + 95 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .square)
+                let metalB = oscillator((810 + 135 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase, waveform: .square)
+                value = metalA * 0.050 + metalB * 0.040 + oscillator((270 + 48 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase) * 0.035
+            case 8: // Clave Tone
+                let clave = oscillator((720 + 110 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let hollow = oscillator((360 + 55 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase, waveform: .triangle)
+                value = clave * 0.075 + hollow * 0.056
+            case 9: // Water Tone
+                let water = oscillator((300 + 80 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let ripple = oscillator((450 + 160 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let sway = oscillator(3.5 + 2.5 * speedFactor, phase: &state.tertiaryPhase)
+                value = water * 0.080 + ripple * 0.050 + sway * water * 0.022
+            case 10: // Sonar Tone
+                let ping = oscillator((620 + 120 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let depth = oscillator((155 + 30 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let harmonic = oscillator((1_240 + 240 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase)
+                value = ping * 0.128 + depth * 0.055 + harmonic * 0.026
+            case 11: // Piano Tone
+                let fundamental = oscillator((262 + 70 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let fifth = oscillator((393 + 105 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let octave = oscillator((524 + 140 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase)
+                value = fundamental * 0.080 + fifth * 0.044 + octave * 0.030
+            case 12: // Chime Tone
+                let chime = oscillator((660 + 120 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let sparkle = oscillator((990 + 180 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let body = oscillator((330 + 60 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase)
+                value = chime * 0.092 + sparkle * 0.054 + body * 0.028
+            case 13: // Glass Tone
+                let glass = oscillator((780 + 160 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let shine = oscillator((1_170 + 240 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let body = oscillator((390 + 80 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase)
+                value = glass * 0.062 + shine * 0.036 + body * 0.036
+            default: // Laser Tone
+                let laser = oscillator((520 + 190 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .sawtooth)
+                let beam = oscillator((260 + 95 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let core = oscillator((780 + 285 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase)
+                value = laser * 0.078 + beam * 0.092 + core * 0.030
             }
             let rendered: Double
             if previewEnvelope {
