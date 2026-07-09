@@ -316,8 +316,9 @@ final class GameAudioEngine {
         smoothPuckVoice.wetPlayer.position = position
         smoothPuckVoice.dryPlayer.pan = pan
         smoothPuckVoice.wetPlayer.pan = pan
-        smoothPuckVoice.dryPlayer.volume = gain
-        smoothPuckVoice.wetPlayer.volume = gain
+        let edgeGain = puckTrackingEdgeGain(x: x)
+        smoothPuckVoice.dryPlayer.volume = gain * edgeGain
+        smoothPuckVoice.wetPlayer.volume = gain * edgeGain
     }
 
     func previewSmoothPuck(style: Int, x: Double, proximity: Double, speed: Double, volume: Double, pitchBehavior: Int, pitchChangesWithDistance: Bool, lowerWhenCloser: Bool, volumeChangesWithDistance: Bool) {
@@ -598,7 +599,7 @@ final class GameAudioEngine {
         if voice.dryPlayer.isPlaying { voice.dryPlayer.stop() }
         voice.dryPlayer.position = position
         voice.dryPlayer.pan = pan
-        voice.dryPlayer.volume = 1
+        voice.dryPlayer.volume = puckTrackingEdgeGain(x: x)
         voice.dryPlayer.scheduleBuffer(buffer)
         voice.dryPlayer.play()
 
@@ -606,7 +607,7 @@ final class GameAudioEngine {
             if voice.wetPlayer.isPlaying { voice.wetPlayer.stop() }
             voice.wetPlayer.position = position
             voice.wetPlayer.pan = pan
-            voice.wetPlayer.volume = 1
+            voice.wetPlayer.volume = puckTrackingEdgeGain(x: x)
             voice.wetPlayer.scheduleBuffer(buffer)
             voice.wetPlayer.play()
         }
@@ -652,19 +653,24 @@ final class GameAudioEngine {
     }
 
     private func puckTrackingPosition(x: Double, proximity: Double) -> AVAudio3DPoint {
-        let horizontal = Float((clamp(x) - 0.5) * 56.0)
-        let depth = Float(-(0.30 + (1 - clamp(proximity)) * 3.20))
+        let horizontal = Float((clamp(x) - 0.5) * 9.5)
+        let depth = Float(-(0.42 + (1 - clamp(proximity)) * 1.25))
         return AVAudio3DPoint(x: horizontal, y: 0, z: depth)
     }
 
     private func smoothTrackingPosition(x: Double, proximity: Double) -> AVAudio3DPoint {
-        let horizontal = Float((clamp(x) - 0.5) * 56.0)
-        let depth = Float(-(0.30 + (1 - clamp(proximity)) * 3.20))
+        let horizontal = Float((clamp(x) - 0.5) * 9.5)
+        let depth = Float(-(0.42 + (1 - clamp(proximity)) * 1.25))
         return AVAudio3DPoint(x: horizontal, y: 0, z: depth)
     }
 
     private func puckTrackingPan(x: Double) -> Float {
         Float(min(max((clamp(x) - 0.5) * 12.0, -1), 1))
+    }
+
+    private func puckTrackingEdgeGain(x: Double) -> Float {
+        let edge = abs(clamp(x) - 0.5) * 2
+        return Float(1.0 + 0.22 * edge)
     }
 
     private func renderMalletSlideLoop() -> AVAudioPCMBuffer {
