@@ -37,8 +37,10 @@ final class GameHapticsEngine {
     func play(_ cue: Cue, level: HapticsLevel, strength: Double = 1) {
         guard level != .off, let engine else { return }
         let now = ProcessInfo.processInfo.systemUptime
-        guard now - (lastPlayed[cue] ?? 0) >= cooldown(for: cue) else { return }
-        lastPlayed[cue] = now
+        if let cooldown = cooldown(for: cue) {
+            guard now - (lastPlayed[cue] ?? 0) >= cooldown else { return }
+            lastPlayed[cue] = now
+        }
 
         let levelScale = level == .subtle ? 1.0 : 1.75
         let strengthScale = min(max(strength, 0.25), 1)
@@ -65,56 +67,21 @@ final class GameHapticsEngine {
             }
             return result
         case .playerStrike:
-            var result = [
-                transient(intensity: 1.0 * scale, sharpness: 0.82, time: 0),
-                transient(intensity: 0.48 * scale, sharpness: 0.58, time: 0.035)
-            ]
-            if intense {
-                result.append(continuous(intensity: 0.82 * scale, sharpness: 0.46, time: 0.012, duration: 0.075))
-                result.append(transient(intensity: 0.68 * scale, sharpness: 0.42, time: 0.095))
-            }
-            return result
+            return [transient(intensity: (intense ? 1.0 : 0.74) * scale, sharpness: 0.88, time: 0)]
         case .computerStrike:
-            var result = [
-                transient(intensity: 0.58 * scale, sharpness: 0.50, time: 0),
-                transient(intensity: 0.24 * scale, sharpness: 0.35, time: 0.045)
-            ]
-            if intense {
-                result.append(continuous(intensity: 0.34 * scale, sharpness: 0.32, time: 0.015, duration: 0.055))
-                result.append(transient(intensity: 0.28 * scale, sharpness: 0.40, time: 0.088))
-            }
-            return result
+            return [transient(intensity: (intense ? 0.70 : 0.42) * scale, sharpness: 0.54, time: 0)]
         case .wall:
-            var result = [
-                transient(intensity: 0.98 * scale, sharpness: 1.0, time: 0),
-                transient(intensity: 0.42 * scale, sharpness: 0.86, time: 0.022)
-            ]
-            if intense {
-                result.append(transient(intensity: 0.72 * scale, sharpness: 0.96, time: 0.046))
-            }
-            return result
+            return [transient(intensity: (intense ? 0.92 : 0.62) * scale, sharpness: 1.0, time: 0)]
         case .goal:
-            var result = [
-                transient(intensity: 0.58 * scale, sharpness: 0.35, time: 0),
-                transient(intensity: 0.78 * scale, sharpness: 0.48, time: 0.09),
-                transient(intensity: 1.0 * scale, sharpness: 0.68, time: 0.18)
+            return [
+                transient(intensity: (intense ? 1.0 : 0.72) * scale, sharpness: 0.58, time: 0),
+                continuous(intensity: (intense ? 0.72 : 0.42) * scale, sharpness: 0.30, time: 0, duration: 0.08)
             ]
-            if intense {
-                result.append(continuous(intensity: 0.72 * scale, sharpness: 0.36, time: 0.02, duration: 0.24))
-                result.append(transient(intensity: 0.85 * scale, sharpness: 0.62, time: 0.29))
-            }
-            return result
         case .boardBall:
-            var result = [
-                continuous(intensity: 0.92 * scale, sharpness: 0.18, time: 0, duration: 0.12),
-                transient(intensity: 1.0 * scale, sharpness: 0.82, time: 0.035),
-                transient(intensity: 0.70 * scale, sharpness: 0.42, time: 0.15)
+            return [
+                transient(intensity: (intense ? 1.0 : 0.76) * scale, sharpness: 0.72, time: 0),
+                continuous(intensity: (intense ? 0.62 : 0.38) * scale, sharpness: 0.22, time: 0, duration: 0.07)
             ]
-            if intense {
-                result.append(continuous(intensity: 0.92 * scale, sharpness: 0.24, time: 0.11, duration: 0.16))
-                result.append(transient(intensity: 0.95 * scale, sharpness: 0.70, time: 0.25))
-            }
-            return result
         case .gameOver:
             var result = [
                 continuous(intensity: 0.50 * scale, sharpness: 0.18, time: 0, duration: 0.18),
@@ -153,13 +120,10 @@ final class GameHapticsEngine {
         ]
     }
 
-    private func cooldown(for cue: Cue) -> TimeInterval {
+    private func cooldown(for cue: Cue) -> TimeInterval? {
         switch cue {
         case .serve: 0.18
-        case .playerStrike: 0.055
-        case .computerStrike: 0.07
-        case .wall: 0.075
-        case .goal, .boardBall: 0.30
+        case .playerStrike, .computerStrike, .wall, .goal, .boardBall: nil
         case .gameOver: 0.50
         }
     }

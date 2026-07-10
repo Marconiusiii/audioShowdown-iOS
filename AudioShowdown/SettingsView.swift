@@ -229,6 +229,16 @@ struct SettingsView: View {
                 settings.pitchBehavior = 1
             }
         }
+        .onChange(of: settings.puckTrackingStyle) { _, style in
+            if style == .smooth, settings.smoothPuckSound == 3 {
+                settings.volumeChangesWithDistance = true
+            }
+        }
+        .onChange(of: settings.smoothPuckSound) { _, sound in
+            if sound == 3 {
+                settings.volumeChangesWithDistance = true
+            }
+        }
     }
 
     private func previewPuckSound(_ index: Int) {
