@@ -2,11 +2,12 @@ import SwiftUI
 
 struct StartView: View {
     @ObservedObject var settings: GameSettings
-    let audioEngine: GameAudioEngine
+    let audioEngine: () -> GameAudioEngine
     let startGame: () -> Void
     let startTraining: () -> Void
     @State private var showingHowToPlay = false
     @State private var showingSettings = false
+    @State private var settingsAudioEngine: GameAudioEngine?
     private var theme: GameTheme { GameTheme.all[settings.themeIndex] }
 
     var body: some View {
@@ -32,7 +33,10 @@ struct StartView: View {
 
                     AppButtonRow(title: "Start Game", theme: theme, prominent: true, action: startGame)
                     AppButtonRow(title: "How to Play", theme: theme) { showingHowToPlay = true }
-                    AppButtonRow(title: "Settings", theme: theme) { showingSettings = true }
+                    AppButtonRow(title: "Settings", theme: theme) {
+                        settingsAudioEngine = audioEngine()
+                        showingSettings = true
+                    }
                     AppButtonRow(title: "Where the duck is the puck?", theme: theme, action: startTraining)
                 }
                 .frame(maxWidth: .infinity)
@@ -42,6 +46,10 @@ struct StartView: View {
         }
         .background(theme.background.ignoresSafeArea())
         .sheet(isPresented: $showingHowToPlay) { HowToPlayView(theme: theme) }
-        .sheet(isPresented: $showingSettings) { SettingsView(settings: settings, audioEngine: audioEngine) }
+        .sheet(isPresented: $showingSettings) {
+            if let settingsAudioEngine {
+                SettingsView(settings: settings, audioEngine: settingsAudioEngine)
+            }
+        }
     }
 }

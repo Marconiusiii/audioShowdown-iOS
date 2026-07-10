@@ -224,9 +224,6 @@ struct SettingsView: View {
             .toolbarBackground(theme.surface, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
         }
-        .onAppear {
-            audioEngine.warmUp(volume: settings.volume, reverbStyle: settings.reverbStyle, puckVolume: settings.puckVolume)
-        }
         .onChange(of: settings.pitchChangesWithDistance) { _, enabled in
             if enabled, settings.pitchBehavior == 0 {
                 settings.pitchBehavior = 1

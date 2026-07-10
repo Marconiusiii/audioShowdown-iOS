@@ -132,7 +132,6 @@ final class GameModel: ObservableObject {
         self.training = training
         self.audio = audio
         phase = training ? .training : .waitingForServe
-        audio.warmUp(volume: settings.volume, reverbStyle: settings.reverbStyle, puckVolume: settings.puckVolume)
     }
 
     func announceInitialState() {
@@ -639,7 +638,7 @@ final class GameModel: ObservableObject {
 
     private func updatePuckAudio(now: TimeInterval) {
         let proximity = Self.playerProximity(forY: puck.y)
-        if settings.puckTrackingStyle == .smooth {
+        if !training, settings.puckTrackingStyle == .smooth {
             audio.updateSmoothPuck(
                 style: settings.smoothPuckSound,
                 x: puck.x / Self.width,

@@ -71,7 +71,9 @@ final class GameAudioEngine {
     private let dryEnvironment = AVAudioEnvironmentNode()
     private let wetEnvironment = AVAudioEnvironmentNode()
     private let wetMixer = AVAudioMixerNode()
+    private let trackingMixer = AVAudioMixerNode()
     private let sourceFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
+    private let trackingFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
     private let malletSlideVoice = SpatialVoice()
     private let smoothPuckVoice = SpatialVoice()
     private var puckVoices: [SpatialVoice] = []
@@ -88,6 +90,7 @@ final class GameAudioEngine {
     private var smoothPuckDryQueuedBuffers = 0
     private var smoothPuckWetQueuedBuffers = 0
     private var smoothPuckRenderState = SmoothPuckRenderState()
+    private var smoothPuckRenderX = 0.5
     private var smoothPuckRenderSpeed = 0.0
     private var smoothPuckPitchMultiplier = 1.0
     private var smoothPuckRattleEnergy = 0.0
@@ -98,9 +101,11 @@ final class GameAudioEngine {
         engine.attach(dryEnvironment)
         engine.attach(wetEnvironment)
         engine.attach(wetMixer)
+        engine.attach(trackingMixer)
         engine.connect(dryEnvironment, to: engine.mainMixerNode, format: nil)
         engine.connect(wetEnvironment, to: wetMixer, format: nil)
         engine.connect(wetMixer, to: engine.mainMixerNode, format: nil)
+        engine.connect(trackingMixer, to: engine.mainMixerNode, format: trackingFormat)
         configureSpatialEnvironment(dryEnvironment)
         configureSpatialEnvironment(wetEnvironment)
         dryEnvironment.reverbParameters.enable = false
@@ -270,6 +275,7 @@ final class GameAudioEngine {
         }
         smoothPuckRattleEnergy = max(0, smoothPuckRattleEnergy - 0.010)
         let near = clamp(proximity)
+        smoothPuckRenderX = clamp(x)
         smoothPuckRenderSpeed = speed
         let pitchAmount = pitchChangesWithDistance && style != 3 ? [0.0, 0.25, 0.5][pitchBehavior] : 0
         smoothPuckPitchMultiplier = 1 + pitchAmount * (lowerWhenCloser ? 1 - near : near)
@@ -296,8 +302,7 @@ final class GameAudioEngine {
         primeSmoothPuckQueue(generation: smoothPuckGeneration)
         let baseGain = volumeChangesWithDistance ? 0.86 + 0.14 * near : 0.94
         let gain = Float(baseGain * clamp(volume))
-        let pan = puckTrackingPan(x: x)
-        smoothPuckVoice.dryPlayer.pan = pan
+        smoothPuckVoice.dryPlayer.pan = 0
         smoothPuckVoice.dryPlayer.volume = gain
     }
 
@@ -555,8 +560,8 @@ final class GameAudioEngine {
     private func configureTracking(voice: SpatialVoice) {
         engine.attach(voice.dryPlayer)
         engine.attach(voice.wetPlayer)
-        engine.connect(voice.dryPlayer, to: engine.mainMixerNode, format: sourceFormat)
-        engine.connect(voice.wetPlayer, to: engine.mainMixerNode, format: sourceFormat)
+        engine.connect(voice.dryPlayer, to: trackingMixer, format: trackingFormat)
+        engine.connect(voice.wetPlayer, to: trackingMixer, format: trackingFormat)
         voice.dryPlayer.reverbBlend = 0
         voice.wetPlayer.reverbBlend = 0
         voice.wetPlayer.volume = 0
@@ -580,8 +585,11 @@ final class GameAudioEngine {
 
     private func configureAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        try session.setCategory(.playback, mode: .measurement, options: [.mixWithOthers])
         try session.setPreferredSampleRate(sourceFormat.sampleRate)
+        if session.maximumOutputNumberOfChannels >= 2 {
+            try session.setPreferredOutputNumberOfChannels(2)
+        }
         // A 5 ms buffer is too aggressive when debugging tethered from Xcode and can starve VoiceOver speech.
         // 12 ms keeps gameplay responsive while leaving enough audio scheduling room for assistive audio.
         try session.setPreferredIOBufferDuration(0.012)
@@ -592,11 +600,11 @@ final class GameAudioEngine {
         guard ensureEngineRunning() else { return }
         let voice = puckVoices[nextPuckVoice]
         nextPuckVoice = (nextPuckVoice + 1) % puckVoices.count
-        let pan = puckTrackingPan(x: x)
+        let stereoBuffer = pannedTrackingBuffer(from: buffer, x: x)
         if voice.dryPlayer.isPlaying { voice.dryPlayer.stop() }
-        voice.dryPlayer.pan = pan
+        voice.dryPlayer.pan = 0
         voice.dryPlayer.volume = 1
-        voice.dryPlayer.scheduleBuffer(buffer)
+        voice.dryPlayer.scheduleBuffer(stereoBuffer)
         voice.dryPlayer.play()
         if voice.wetPlayer.isPlaying { voice.wetPlayer.stop() }
     }
@@ -640,8 +648,29 @@ final class GameAudioEngine {
         return AVAudio3DPoint(x: horizontal, y: 0, z: depth)
     }
 
-    private func puckTrackingPan(x: Double) -> Float {
-        Float(min(max((clamp(x) - 0.5) * 12.0, -1), 1))
+    private func pannedTrackingBuffer(from monoBuffer: AVAudioPCMBuffer, x: Double) -> AVAudioPCMBuffer {
+        let frameCount = Int(monoBuffer.frameLength)
+        let stereoBuffer = AVAudioPCMBuffer(pcmFormat: trackingFormat, frameCapacity: AVAudioFrameCount(frameCount))!
+        stereoBuffer.frameLength = monoBuffer.frameLength
+        guard
+            let monoSamples = monoBuffer.floatChannelData?[0],
+            let stereoSamples = stereoBuffer.floatChannelData
+        else {
+            return stereoBuffer
+        }
+
+        let pan = clamp(x)
+        let leftGain = cos(pan * Double.pi / 2)
+        let rightGain = sin(pan * Double.pi / 2)
+        let leftSamples = stereoSamples[0]
+        let rightSamples = stereoSamples[1]
+
+        for frame in 0..<frameCount {
+            let sample = monoSamples[frame]
+            leftSamples[frame] = sample * Float(leftGain)
+            rightSamples[frame] = sample * Float(rightGain)
+        }
+        return stereoBuffer
     }
 
     private func renderMalletSlideLoop() -> AVAudioPCMBuffer {
@@ -681,8 +710,8 @@ final class GameAudioEngine {
 
     private func primeSmoothPuckQueue(generation: Int) {
         guard generation == smoothPuckGeneration, smoothPuckStyle >= 0 else { return }
-        while smoothPuckDryQueuedBuffers < 4 {
-            let buffer = renderSmoothPuckBuffer(
+        while smoothPuckDryQueuedBuffers < 2 {
+            let monoBuffer = renderSmoothPuckBuffer(
                 style: smoothPuckStyle,
                 speed: smoothPuckRenderSpeed,
                 pitchMultiplier: smoothPuckPitchMultiplier,
@@ -690,6 +719,7 @@ final class GameAudioEngine {
                 state: &smoothPuckRenderState,
                 previewEnvelope: false
             )
+            let buffer = pannedTrackingBuffer(from: monoBuffer, x: smoothPuckRenderX)
             smoothPuckDryQueuedBuffers += 1
             smoothPuckVoice.dryPlayer.scheduleBuffer(buffer) { [weak self] in
                 Task { @MainActor [weak self] in
@@ -702,7 +732,7 @@ final class GameAudioEngine {
     }
 
     private func renderSmoothPuckBuffer(style: Int, speed: Double, pitchMultiplier: Double, rattleEnergy: Double, state: inout SmoothPuckRenderState, previewEnvelope: Bool) -> AVAudioPCMBuffer {
-        let duration = previewEnvelope ? 0.65 : 0.28
+        let duration = previewEnvelope ? 0.65 : 0.08
         let frameCount = Int(duration * sourceFormat.sampleRate)
         let buffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(frameCount))!
         buffer.frameLength = AVAudioFrameCount(frameCount)
