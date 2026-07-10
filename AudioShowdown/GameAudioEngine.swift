@@ -39,9 +39,6 @@ final class GameAudioEngine {
         var rattleEnvelope = 0.0
         var rattleBodyEnvelope = 0.0
         var rattleResonancePhase = 0.0
-        var bounceEnvelope = 0.0
-        var bounceCooldown = 0.0
-        var secondBouncePending = 0.0
         var clicker1Countdown = 0.02
         var clicker2Countdown = 0.08
         var clicker3Countdown = 0.14
@@ -110,8 +107,8 @@ final class GameAudioEngine {
         wetEnvironment.reverbParameters.enable = true
         wetMixer.outputVolume = 0
         configure(voice: malletSlideVoice)
-        configure(voice: smoothPuckVoice)
-        puckVoices = makeVoices(count: 10)
+        configureTracking(voice: smoothPuckVoice)
+        puckVoices = makeTrackingVoices(count: 10)
         effectVoices = makeVoices(count: 16)
     }
 
@@ -292,20 +289,6 @@ final class GameAudioEngine {
             if reverbStyle > 0, smoothPuckWetQueuedBuffers > 0 {
                 smoothPuckVoice.wetPlayer.play()
             }
-        } else if reverbStyle > 0, !smoothPuckVoice.wetPlayer.isPlaying {
-            smoothPuckGeneration += 1
-            smoothPuckDryQueuedBuffers = 0
-            smoothPuckWetQueuedBuffers = 0
-            smoothPuckRenderState = SmoothPuckRenderState()
-            smoothPuckVoice.dryPlayer.stop()
-            smoothPuckVoice.wetPlayer.stop()
-            primeSmoothPuckQueue(generation: smoothPuckGeneration)
-            if smoothPuckDryQueuedBuffers > 0 {
-                smoothPuckVoice.dryPlayer.play()
-            }
-            if smoothPuckWetQueuedBuffers > 0 {
-                smoothPuckVoice.wetPlayer.play()
-            }
         } else if reverbStyle == 0, smoothPuckVoice.wetPlayer.isPlaying {
             smoothPuckVoice.wetPlayer.stop()
             smoothPuckWetQueuedBuffers = 0
@@ -313,14 +296,9 @@ final class GameAudioEngine {
         primeSmoothPuckQueue(generation: smoothPuckGeneration)
         let baseGain = volumeChangesWithDistance ? 0.86 + 0.14 * near : 0.94
         let gain = Float(baseGain * clamp(volume))
-        let position = puckTrackingPosition()
         let pan = puckTrackingPan(x: x)
-        smoothPuckVoice.dryPlayer.position = position
-        smoothPuckVoice.wetPlayer.position = position
         smoothPuckVoice.dryPlayer.pan = pan
-        smoothPuckVoice.wetPlayer.pan = pan
         smoothPuckVoice.dryPlayer.volume = gain
-        smoothPuckVoice.wetPlayer.volume = gain
     }
 
     func previewSmoothPuck(style: Int, x: Double, proximity: Double, speed: Double, volume: Double, pitchBehavior: Int, pitchChangesWithDistance: Bool, lowerWhenCloser: Bool, volumeChangesWithDistance: Bool) {
@@ -357,9 +335,6 @@ final class GameAudioEngine {
 
     func energizeSmoothPuck(amount: Double) {
         smoothPuckRattleEnergy = clamp(smoothPuckRattleEnergy + amount)
-        smoothPuckRenderState.bounceEnvelope = max(smoothPuckRenderState.bounceEnvelope, min(1, 0.24 + amount * 0.9))
-        smoothPuckRenderState.bounceCooldown = 0.11
-        smoothPuckRenderState.secondBouncePending = max(smoothPuckRenderState.secondBouncePending, min(0.55, 0.10 + amount * 0.38))
     }
 
     func reverbAudition() {
@@ -556,6 +531,14 @@ final class GameAudioEngine {
         }
     }
 
+    private func makeTrackingVoices(count: Int) -> [SpatialVoice] {
+        (0..<count).map { _ in
+            let voice = SpatialVoice()
+            configureTracking(voice: voice)
+            return voice
+        }
+    }
+
     private func configure(voice: SpatialVoice) {
         engine.attach(voice.dryPlayer)
         engine.attach(voice.wetPlayer)
@@ -567,6 +550,16 @@ final class GameAudioEngine {
         voice.wetPlayer.sourceMode = .spatializeIfMono
         voice.wetPlayer.renderingAlgorithm = .HRTFHQ
         voice.wetPlayer.reverbBlend = 100
+    }
+
+    private func configureTracking(voice: SpatialVoice) {
+        engine.attach(voice.dryPlayer)
+        engine.attach(voice.wetPlayer)
+        engine.connect(voice.dryPlayer, to: engine.mainMixerNode, format: sourceFormat)
+        engine.connect(voice.wetPlayer, to: engine.mainMixerNode, format: sourceFormat)
+        voice.dryPlayer.reverbBlend = 0
+        voice.wetPlayer.reverbBlend = 0
+        voice.wetPlayer.volume = 0
     }
 
     private func ensureEngineRunning() -> Bool {
@@ -599,23 +592,13 @@ final class GameAudioEngine {
         guard ensureEngineRunning() else { return }
         let voice = puckVoices[nextPuckVoice]
         nextPuckVoice = (nextPuckVoice + 1) % puckVoices.count
-        let position = puckTrackingPosition()
         let pan = puckTrackingPan(x: x)
         if voice.dryPlayer.isPlaying { voice.dryPlayer.stop() }
-        voice.dryPlayer.position = position
         voice.dryPlayer.pan = pan
         voice.dryPlayer.volume = 1
         voice.dryPlayer.scheduleBuffer(buffer)
         voice.dryPlayer.play()
-
-        if reverbStyle > 0 {
-            if voice.wetPlayer.isPlaying { voice.wetPlayer.stop() }
-            voice.wetPlayer.position = position
-            voice.wetPlayer.pan = pan
-            voice.wetPlayer.volume = 1
-            voice.wetPlayer.scheduleBuffer(buffer)
-            voice.wetPlayer.play()
-        }
+        if voice.wetPlayer.isPlaying { voice.wetPlayer.stop() }
     }
 
     private func playEffect(_ buffer: AVAudioPCMBuffer, x: Double, proximity: Double) {
@@ -648,17 +631,13 @@ final class GameAudioEngine {
         environment.distanceAttenuationParameters.distanceAttenuationModel = .inverse
         environment.distanceAttenuationParameters.referenceDistance = 0.8
         environment.distanceAttenuationParameters.maximumDistance = 30
-        environment.distanceAttenuationParameters.rolloffFactor = 0.35
+        environment.distanceAttenuationParameters.rolloffFactor = 0
     }
 
     private func spatialPosition(x: Double, proximity: Double) -> AVAudio3DPoint {
         let horizontal = Float((clamp(x) - 0.5) * 4.8)
         let depth = Float(-(0.5 + (1 - clamp(proximity)) * 5.0))
         return AVAudio3DPoint(x: horizontal, y: 0, z: depth)
-    }
-
-    private func puckTrackingPosition() -> AVAudio3DPoint {
-        AVAudio3DPoint(x: 0, y: 0, z: -1)
     }
 
     private func puckTrackingPan(x: Double) -> Float {
@@ -719,15 +698,6 @@ final class GameAudioEngine {
                     self.primeSmoothPuckQueue(generation: generation)
                 }
             }
-            if reverbStyle > 0 {
-                smoothPuckWetQueuedBuffers += 1
-                smoothPuckVoice.wetPlayer.scheduleBuffer(buffer) { [weak self] in
-                    Task { @MainActor [weak self] in
-                        guard let self, generation == self.smoothPuckGeneration else { return }
-                        self.smoothPuckWetQueuedBuffers = max(0, self.smoothPuckWetQueuedBuffers - 1)
-                    }
-                }
-            }
         }
     }
 
@@ -762,59 +732,48 @@ final class GameAudioEngine {
         func triggerClicker(_ countdown: inout Double, _ envelope: inout Double, baseRange: ClosedRange<Double>, chaos: Double) {
             countdown -= 1 / sampleRate
             guard countdown <= 0 else { return }
-            let chaosCompression = 1 - 0.72 * chaos
-            let interval = Double.random(in: baseRange) * max(0.28, chaosCompression)
+            let chaosCompression = 1 - 0.62 * chaos
+            let interval = Double.random(in: baseRange) * max(0.36, chaosCompression)
             countdown = interval * Double.random(in: 0.72...1.42)
-            envelope += Double.random(in: 0.82...1.35)
+            envelope += Double.random(in: 1.0...1.55)
         }
 
         for frame in 0..<frameCount {
             let noise = Double.random(in: -1...1)
             let value: Double
             switch style {
-            case 0: // Clean Sine
-                let tone = oscillator(392 * pitchMultiplier, phase: &state.primaryPhase)
-                let anchor = oscillator(196 * pitchMultiplier, phase: &state.secondaryPhase)
-                value = tone * 0.135 + anchor * 0.040
-            case 1: // Warm Hum
-                let body = oscillator(164 * pitchMultiplier, phase: &state.primaryPhase)
-                let roundness = oscillator(82 * pitchMultiplier, phase: &state.secondaryPhase, waveform: .triangle)
-                let air = lowPass(noise, cutoff: 180 + 120 * speedFactor, state: &state.lowState)
-                value = body * 0.118 + roundness * 0.056 + air * 0.020
-            case 2: // Bright Beam
-                let beam = oscillator(620 * pitchMultiplier, phase: &state.primaryPhase)
-                let core = oscillator(310 * pitchMultiplier, phase: &state.secondaryPhase)
-                let sheen = oscillator(1_240 * pitchMultiplier, phase: &state.tertiaryPhase)
-                value = beam * 0.104 + core * 0.052 + sheen * 0.020
+            case 0: // Warm Tone
+                let body = oscillator((150 + 28 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let roundness = oscillator((75 + 14 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase, waveform: .triangle)
+                let presence = oscillator((300 + 56 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase)
+                value = body * 0.120 + roundness * 0.050 + presence * 0.026
+            case 1: // Bell Tone
+                let bell = oscillator((330 + 70 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let chime = oscillator((660 + 140 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let shimmer = oscillator(5.2 + 2.2 * speedFactor, phase: &state.tertiaryPhase)
+                value = bell * 0.095 + chime * 0.052 + shimmer * chime * 0.022
+            case 2: // Tick Tone
+                let tick = oscillator((500 + 95 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .square)
+                let body = oscillator((250 + 48 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let softener = lowPass(noise, cutoff: 1_200 + 400 * speedFactor, state: &state.lowState)
+                value = tick * 0.052 + body * 0.070 + softener * 0.012
             case 3: // Showdown Ball
                 let chaos = clamp(rattleEnergy)
-                let movement = clamp(0.08 + 0.92 * speedFactor)
-                state.bounceCooldown = max(0, state.bounceCooldown - 1 / sampleRate)
-                if state.bounceCooldown == 0, state.secondBouncePending > 0 {
-                    state.bounceEnvelope = max(state.bounceEnvelope, state.secondBouncePending)
-                    state.secondBouncePending = 0
-                }
-                state.bounceEnvelope *= exp(-1 / (sampleRate * 0.030))
-                let bounceLift = clamp(state.bounceEnvelope)
-                let rollContact = max(0, 1 - bounceLift * 1.35)
-                let rollNoise = lowPass(noise, cutoff: 105 + 210 * movement, state: &state.lowState)
-                let rollBody = oscillator(78 + 18 * movement, phase: &state.primaryPhase, waveform: .triangle)
-                let rollWeight = oscillator(39 + 9 * movement, phase: &state.secondaryPhase)
-                let roll = (rollNoise * 0.046 + rollBody * 0.030 + rollWeight * 0.020) * rollContact * (0.45 + 0.55 * movement)
-                let clickRate = 1 / max(0.16, 0.28 + (1 - movement) * 1.35)
-                let activity = clamp(movement * 0.82 + chaos * 0.36 + bounceLift * 0.75)
-                let timingScale = 1 / max(0.20, activity)
+                let movement = 0.35 + 0.65 * speedFactor
+                let shellBody = lowPass(noise, cutoff: 70 + 120 * speedFactor, state: &state.lowState)
+                let shellTone = oscillator(56 + 22 * speedFactor, phase: &state.primaryPhase, waveform: .triangle)
+                let rotation = oscillator(2.5 + 5.0 * speedFactor, phase: &state.secondaryPhase)
 
-                triggerClicker(&state.clicker1Countdown, &state.clicker1Envelope, baseRange: (0.16 * timingScale)...(0.42 * timingScale), chaos: chaos + bounceLift)
-                triggerClicker(&state.clicker2Countdown, &state.clicker2Envelope, baseRange: (0.21 * timingScale)...(0.54 * timingScale), chaos: chaos + bounceLift)
-                triggerClicker(&state.clicker3Countdown, &state.clicker3Envelope, baseRange: (0.27 * timingScale)...(0.68 * timingScale), chaos: chaos + bounceLift)
-                triggerClicker(&state.clicker4Countdown, &state.clicker4Envelope, baseRange: (0.34 * timingScale)...(0.82 * timingScale), chaos: chaos + bounceLift)
-                triggerClicker(&state.clicker5Countdown, &state.clicker5Envelope, baseRange: (0.43 * timingScale)...(1.02 * timingScale), chaos: chaos + bounceLift)
-                triggerClicker(&state.clicker6Countdown, &state.clicker6Envelope, baseRange: (0.54 * timingScale)...(1.22 * timingScale), chaos: chaos + bounceLift)
-                triggerClicker(&state.clicker7Countdown, &state.clicker7Envelope, baseRange: (0.67 * timingScale)...(1.48 * timingScale), chaos: chaos + bounceLift)
-                triggerClicker(&state.clicker8Countdown, &state.clicker8Envelope, baseRange: (0.82 * timingScale)...(1.78 * timingScale), chaos: chaos + bounceLift)
+                triggerClicker(&state.clicker1Countdown, &state.clicker1Envelope, baseRange: 0.16...0.38, chaos: chaos)
+                triggerClicker(&state.clicker2Countdown, &state.clicker2Envelope, baseRange: 0.20...0.48, chaos: chaos)
+                triggerClicker(&state.clicker3Countdown, &state.clicker3Envelope, baseRange: 0.25...0.60, chaos: chaos)
+                triggerClicker(&state.clicker4Countdown, &state.clicker4Envelope, baseRange: 0.31...0.74, chaos: chaos)
+                triggerClicker(&state.clicker5Countdown, &state.clicker5Envelope, baseRange: 0.38...0.88, chaos: chaos)
+                triggerClicker(&state.clicker6Countdown, &state.clicker6Envelope, baseRange: 0.46...1.05, chaos: chaos)
+                triggerClicker(&state.clicker7Countdown, &state.clicker7Envelope, baseRange: 0.56...1.26, chaos: chaos)
+                triggerClicker(&state.clicker8Countdown, &state.clicker8Envelope, baseRange: 0.68...1.52, chaos: chaos)
 
-                if Double.random(in: 0...1) < (clickRate + bounceLift * 28.0) / sampleRate {
+                if Double.random(in: 0...1) < (0.50 + chaos * 9.0 + speedFactor * 2.4) / sampleRate {
                     let burst = Double.random(in: 0.45...0.85)
                     switch Int.random(in: 0...7) {
                     case 0: state.clicker1Envelope += burst
@@ -884,56 +843,63 @@ final class GameAudioEngine {
                     + state.clicker6Envelope * bearingF * 0.048
                     + state.clicker7Envelope * bearingG * 0.054
                     + state.clicker8Envelope * bearingH * 0.052
-                value = roll + clicks * (1.05 + 0.20 * bounceLift)
-            case 4: // Low Drone
-                let sub = oscillator(98 * pitchMultiplier, phase: &state.primaryPhase)
-                let body = oscillator(196 * pitchMultiplier, phase: &state.secondaryPhase, waveform: .triangle)
-                value = sub * 0.090 + body * 0.072
-            case 5: // Soft Buzz
-                let buzz = oscillator(246 * pitchMultiplier, phase: &state.primaryPhase, waveform: .sawtooth)
-                let warmth = oscillator(123 * pitchMultiplier, phase: &state.secondaryPhase)
-                value = buzz * 0.055 + warmth * 0.086
-            case 6: // Glass Drone
-                let glass = oscillator(740 * pitchMultiplier, phase: &state.primaryPhase)
-                let body = oscillator(370 * pitchMultiplier, phase: &state.secondaryPhase)
-                let shine = oscillator(1_480 * pitchMultiplier, phase: &state.tertiaryPhase)
-                value = glass * 0.080 + body * 0.044 + shine * 0.018
-            case 7: // Bell Drone
-                let bell = oscillator(523 * pitchMultiplier, phase: &state.primaryPhase)
-                let body = oscillator(262 * pitchMultiplier, phase: &state.secondaryPhase)
-                let shimmer = oscillator(1_046 * pitchMultiplier, phase: &state.tertiaryPhase)
-                value = bell * 0.096 + body * 0.052 + shimmer * 0.018
-            case 8: // Airy Tone
-                let tone = oscillator(330 * pitchMultiplier, phase: &state.primaryPhase)
-                let breath = lowPass(noise, cutoff: 620, state: &state.lowState)
-                let smoothBreath = highPass(breath, cutoff: 180, state: &state.midState, previousInput: &state.previousInput)
-                value = tone * 0.092 + smoothBreath * 0.030
-            case 9: // Electric Tone
-                let electric = oscillator(466 * pitchMultiplier, phase: &state.primaryPhase, waveform: .triangle)
-                let lower = oscillator(233 * pitchMultiplier, phase: &state.secondaryPhase)
-                let upper = oscillator(932 * pitchMultiplier, phase: &state.tertiaryPhase)
-                value = electric * 0.110 + lower * 0.052 + upper * 0.022
-            case 10: // Round Tone
-                let round = oscillator(294 * pitchMultiplier, phase: &state.primaryPhase)
-                let low = oscillator(147 * pitchMultiplier, phase: &state.secondaryPhase, waveform: .triangle)
-                value = round * 0.118 + low * 0.058
-            case 11: // Clear Tone
-                let clear = oscillator(587 * pitchMultiplier, phase: &state.primaryPhase)
-                let support = oscillator(294 * pitchMultiplier, phase: &state.secondaryPhase)
-                value = clear * 0.112 + support * 0.044
-            case 12: // Deep Hum
-                let low = oscillator(130 * pitchMultiplier, phase: &state.primaryPhase)
-                let body = oscillator(65 * pitchMultiplier, phase: &state.secondaryPhase)
-                value = low * 0.115 + body * 0.062
-            case 13: // Silver Tone
-                let silver = oscillator(880 * pitchMultiplier, phase: &state.primaryPhase)
-                let body = oscillator(440 * pitchMultiplier, phase: &state.secondaryPhase)
-                value = silver * 0.074 + body * 0.070
+                value = shellBody * 0.020 * movement
+                    + shellTone * 0.010
+                    + rotation * 0.004
+                    + clicks * 1.35
+            case 4: // Sine Tone
+                let tone = oscillator((430 + 90 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let anchor = oscillator((215 + 45 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let presence = oscillator((860 + 180 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase)
+                value = tone * 0.145 + anchor * 0.046 + presence * 0.020
+            case 5: // Square Tone
+                let square = oscillator((240 + 70 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .square)
+                let rounded = oscillator((120 + 35 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let edge = oscillator((480 + 140 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase, waveform: .triangle)
+                value = square * 0.070 + rounded * 0.074 + edge * 0.022
+            case 6: // Pluck Tone
+                let pluck = oscillator((285 + 65 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .triangle)
+                let overtone = oscillator((570 + 130 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let motion = oscillator(4.0 + 4.0 * speedFactor, phase: &state.tertiaryPhase)
+                value = pluck * 0.095 + overtone * 0.038 + motion * overtone * 0.018
+            case 7: // Cowbell Tone
+                let metalA = oscillator((540 + 95 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .square)
+                let metalB = oscillator((810 + 135 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase, waveform: .square)
+                value = metalA * 0.050 + metalB * 0.040 + oscillator((270 + 48 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase) * 0.035
+            case 8: // Clave Tone
+                let clave = oscillator((720 + 110 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let hollow = oscillator((360 + 55 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase, waveform: .triangle)
+                value = clave * 0.075 + hollow * 0.056
+            case 9: // Water Tone
+                let water = oscillator((300 + 80 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let ripple = oscillator((450 + 160 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let sway = oscillator(3.5 + 2.5 * speedFactor, phase: &state.tertiaryPhase)
+                value = water * 0.080 + ripple * 0.050 + sway * water * 0.022
+            case 10: // Sonar Tone
+                let ping = oscillator((620 + 120 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let depth = oscillator((155 + 30 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let harmonic = oscillator((1_240 + 240 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase)
+                value = ping * 0.128 + depth * 0.055 + harmonic * 0.026
+            case 11: // Piano Tone
+                let fundamental = oscillator((262 + 70 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let fifth = oscillator((393 + 105 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let octave = oscillator((524 + 140 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase)
+                value = fundamental * 0.080 + fifth * 0.044 + octave * 0.030
+            case 12: // Chime Tone
+                let chime = oscillator((660 + 120 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let sparkle = oscillator((990 + 180 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let body = oscillator((330 + 60 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase)
+                value = chime * 0.092 + sparkle * 0.054 + body * 0.028
+            case 13: // Glass Tone
+                let glass = oscillator((780 + 160 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase)
+                let shine = oscillator((1_170 + 240 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let body = oscillator((390 + 80 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase)
+                value = glass * 0.062 + shine * 0.036 + body * 0.036
             default: // Laser Tone
-                let beam = oscillator(520 * pitchMultiplier, phase: &state.primaryPhase, waveform: .sawtooth)
-                let core = oscillator(260 * pitchMultiplier, phase: &state.secondaryPhase)
-                let light = oscillator(780 * pitchMultiplier, phase: &state.tertiaryPhase)
-                value = beam * 0.070 + core * 0.092 + light * 0.026
+                let laser = oscillator((520 + 190 * speedFactor) * pitchMultiplier, phase: &state.primaryPhase, waveform: .sawtooth)
+                let beam = oscillator((260 + 95 * speedFactor) * pitchMultiplier, phase: &state.secondaryPhase)
+                let core = oscillator((780 + 285 * speedFactor) * pitchMultiplier, phase: &state.tertiaryPhase)
+                value = laser * 0.078 + beam * 0.092 + core * 0.030
             }
             let rendered: Double
             if previewEnvelope {
