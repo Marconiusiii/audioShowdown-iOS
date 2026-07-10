@@ -12,6 +12,8 @@ final class GameAudioEngine {
         let peak: Double
         var startTime: TimeInterval = 0
         var attack: TimeInterval = 0.004
+        var tremoloRate: Double = 0
+        var tremoloDepth: Double = 0
     }
 
     private struct Noise {
@@ -71,9 +73,7 @@ final class GameAudioEngine {
     private let dryEnvironment = AVAudioEnvironmentNode()
     private let wetEnvironment = AVAudioEnvironmentNode()
     private let wetMixer = AVAudioMixerNode()
-    private let trackingMixer = AVAudioMixerNode()
     private let sourceFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
-    private let trackingFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
     private let malletSlideVoice = SpatialVoice()
     private let smoothPuckVoice = SpatialVoice()
     private var puckVoices: [SpatialVoice] = []
@@ -90,6 +90,7 @@ final class GameAudioEngine {
     private var smoothPuckDryQueuedBuffers = 0
     private var smoothPuckWetQueuedBuffers = 0
     private var smoothPuckRenderState = SmoothPuckRenderState()
+    private var smoothPuckWetRenderState = SmoothPuckRenderState()
     private var smoothPuckRenderX = 0.5
     private var smoothPuckRenderSpeed = 0.0
     private var smoothPuckPitchMultiplier = 1.0
@@ -101,18 +102,16 @@ final class GameAudioEngine {
         engine.attach(dryEnvironment)
         engine.attach(wetEnvironment)
         engine.attach(wetMixer)
-        engine.attach(trackingMixer)
         engine.connect(dryEnvironment, to: engine.mainMixerNode, format: nil)
         engine.connect(wetEnvironment, to: wetMixer, format: nil)
         engine.connect(wetMixer, to: engine.mainMixerNode, format: nil)
-        engine.connect(trackingMixer, to: engine.mainMixerNode, format: trackingFormat)
         configureSpatialEnvironment(dryEnvironment)
         configureSpatialEnvironment(wetEnvironment)
         dryEnvironment.reverbParameters.enable = false
         wetEnvironment.reverbParameters.enable = true
         wetMixer.outputVolume = 0
         configure(voice: malletSlideVoice)
-        configureTracking(voice: smoothPuckVoice)
+        configure(voice: smoothPuckVoice)
         puckVoices = makeTrackingVoices(count: 10)
         effectVoices = makeVoices(count: 16)
     }
@@ -286,6 +285,7 @@ final class GameAudioEngine {
             smoothPuckDryQueuedBuffers = 0
             smoothPuckWetQueuedBuffers = 0
             smoothPuckRenderState = SmoothPuckRenderState()
+            smoothPuckWetRenderState = SmoothPuckRenderState()
             smoothPuckVoice.dryPlayer.stop()
             smoothPuckVoice.wetPlayer.stop()
             primeSmoothPuckQueue(generation: smoothPuckGeneration)
@@ -298,12 +298,23 @@ final class GameAudioEngine {
         } else if reverbStyle == 0, smoothPuckVoice.wetPlayer.isPlaying {
             smoothPuckVoice.wetPlayer.stop()
             smoothPuckWetQueuedBuffers = 0
+            smoothPuckWetRenderState = SmoothPuckRenderState()
+        } else if reverbStyle > 0, !smoothPuckVoice.wetPlayer.isPlaying {
+            smoothPuckWetQueuedBuffers = 0
+            smoothPuckWetRenderState = SmoothPuckRenderState()
+            primeSmoothPuckQueue(generation: smoothPuckGeneration)
+            if smoothPuckWetQueuedBuffers > 0 {
+                smoothPuckVoice.wetPlayer.play()
+            }
         }
         primeSmoothPuckQueue(generation: smoothPuckGeneration)
         let baseGain = volumeChangesWithDistance ? 0.86 + 0.14 * near : 0.94
-        let gain = Float(baseGain * clamp(volume))
-        smoothPuckVoice.dryPlayer.pan = 0
+        let gain = Float(baseGain * clamp(volume) * spatialEdgeGain(x: x))
+        let position = spatialPosition(x: x, proximity: near)
+        smoothPuckVoice.dryPlayer.position = position
+        smoothPuckVoice.wetPlayer.position = position
         smoothPuckVoice.dryPlayer.volume = gain
+        smoothPuckVoice.wetPlayer.volume = reverbStyle > 0 ? gain : 0
     }
 
     func previewSmoothPuck(style: Int, x: Double, proximity: Double, speed: Double, volume: Double, pitchBehavior: Int, pitchChangesWithDistance: Bool, lowerWhenCloser: Bool, volumeChangesWithDistance: Bool) {
@@ -336,6 +347,7 @@ final class GameAudioEngine {
         smoothPuckDryQueuedBuffers = 0
         smoothPuckWetQueuedBuffers = 0
         smoothPuckRenderState = SmoothPuckRenderState()
+        smoothPuckWetRenderState = SmoothPuckRenderState()
     }
 
     func energizeSmoothPuck(amount: Double) {
@@ -400,6 +412,7 @@ final class GameAudioEngine {
             return
         }
         let gain = Float((0.025 + 0.30 * clamp(speed / 1_400)) * clamp(volume))
+        let compensatedGain = min(1.6, gain * Float(spatialEdgeGain(x: x)))
         let position = spatialPosition(x: x, proximity: 0.95)
         if malletSlideStyle != 1 || !malletSlideVoice.dryPlayer.isPlaying {
             malletSlideStyle = 1
@@ -419,8 +432,8 @@ final class GameAudioEngine {
         }
         malletSlideVoice.dryPlayer.position = position
         malletSlideVoice.wetPlayer.position = position
-        malletSlideVoice.dryPlayer.volume = gain
-        malletSlideVoice.wetPlayer.volume = gain
+        malletSlideVoice.dryPlayer.volume = compensatedGain
+        malletSlideVoice.wetPlayer.volume = reverbStyle > 0 ? compensatedGain : 0
     }
 
     func stopMalletSlide() {
@@ -476,56 +489,142 @@ final class GameAudioEngine {
     }
 
     func matchWon() {
-        let motifs = [
-            [261.63, 329.63, 392.00, 523.25],
-            [293.66, 392.00, 440.00, 587.33],
-            [349.23, 440.00, 523.25, 698.46]
-        ]
-        let motifIndex = nonRepeatingIndex(count: motifs.count, excluding: lastWinMotifIndex)
+        let motifIndex = nonRepeatingIndex(count: 3, excluding: lastWinMotifIndex)
         lastWinMotifIndex = motifIndex
-        let motif = motifs[motifIndex]
-        let beat = Double.random(in: 0.105...0.125)
         var tones: [Tone] = []
-        for (index, frequency) in motif.enumerated() {
-            let start = Double(index) * beat
-            tones.append(Tone(waveform: .triangle, startFrequency: frequency, endFrequency: nil, duration: 0.24, peak: 0.46, startTime: start))
-            tones.append(Tone(waveform: .sine, startFrequency: frequency * 2, endFrequency: nil, duration: 0.17, peak: 0.16, startTime: start))
-        }
-        playEffect(render(tones: tones, noises: [], gain: 0.72), x: 0.5, proximity: 0.72)
 
-        let sparkleNotes = [1_046.50, 1_174.66, 1_318.51, 1_396.91, 1_568.0, 1_760.0, 2_093.0]
-        for index in 0..<7 {
-            let frequency = sparkleNotes.randomElement()!
-            let delay = 0.18 + Double(index) * Double.random(in: 0.045...0.075)
-            let sparkle = [
-                Tone(waveform: .sine, startFrequency: frequency, endFrequency: frequency * 1.04, duration: 0.18, peak: 0.30, startTime: delay),
-                Tone(waveform: .sine, startFrequency: frequency * 2.02, endFrequency: nil, duration: 0.10, peak: 0.10, startTime: delay)
-            ]
-            playEffect(
-                render(tones: sparkle, noises: [], gain: Double.random(in: 0.42...0.58)),
-                x: Double.random(in: 0.08...0.92),
-                proximity: Double.random(in: 0.5...0.9)
-            )
+        func addFanfareNote(_ frequency: Double, start: TimeInterval, duration: TimeInterval, peak: Double = 0.38, tremolo: Bool = false) {
+            tones.append(Tone(
+                waveform: .sine,
+                startFrequency: frequency,
+                endFrequency: nil,
+                duration: duration,
+                peak: peak,
+                startTime: start,
+                attack: 0.006,
+                tremoloRate: tremolo ? 14.5 : 0,
+                tremoloDepth: tremolo ? 0.28 : 0
+            ))
+            tones.append(Tone(
+                waveform: .sine,
+                startFrequency: frequency * 2,
+                endFrequency: nil,
+                duration: duration * 0.72,
+                peak: peak * 0.12,
+                startTime: start,
+                attack: 0.008,
+                tremoloRate: tremolo ? 14.5 : 0,
+                tremoloDepth: tremolo ? 0.12 : 0
+            ))
         }
+
+        func addTensionPad(_ frequencies: [Double], start: TimeInterval = 0, duration: TimeInterval = 0.78) {
+            for (index, frequency) in frequencies.enumerated() {
+                tones.append(Tone(
+                    waveform: .sine,
+                    startFrequency: frequency,
+                    endFrequency: nil,
+                    duration: duration,
+                    peak: index == 0 ? 0.050 : 0.040,
+                    startTime: start,
+                    attack: duration * (0.72 + Double(index) * 0.06),
+                    tremoloRate: 4.2,
+                    tremoloDepth: 0.035
+                ))
+            }
+        }
+
+        func addResolvingChord(root: Double, start: TimeInterval, duration: TimeInterval = 0.96) {
+            let chord = [
+                (root * 0.5, 0.20),
+                (root * 2, 0.11)
+            ]
+            for tone in chord {
+                tones.append(Tone(
+                    waveform: .sine,
+                    startFrequency: tone.0,
+                    endFrequency: nil,
+                    duration: duration,
+                    peak: tone.1,
+                    startTime: start,
+                    attack: 0.085
+                ))
+            }
+        }
+
+        switch motifIndex {
+        case 0:
+            addTensionPad([587.33, 783.99, 880.00])
+            addFanfareNote(523.25, start: 0.00, duration: 0.16)
+            addFanfareNote(659.25, start: 0.11, duration: 0.16)
+            addFanfareNote(783.99, start: 0.22, duration: 0.16)
+            addFanfareNote(1_046.50, start: 0.33, duration: 0.18, peak: 0.42)
+            addResolvingChord(root: 659.25, start: 0.52)
+        case 1:
+            addTensionPad([440.00, 587.33, 659.25])
+            addFanfareNote(392.00, start: 0.00, duration: 0.15)
+            addFanfareNote(493.88, start: 0.10, duration: 0.15)
+            addFanfareNote(587.33, start: 0.20, duration: 0.15)
+            addFanfareNote(783.99, start: 0.31, duration: 0.18, peak: 0.40)
+            addResolvingChord(root: 493.88, start: 0.50)
+        default:
+            addTensionPad([392.00, 523.25, 587.33])
+            addFanfareNote(349.23, start: 0.00, duration: 0.15)
+            addFanfareNote(440.00, start: 0.10, duration: 0.15)
+            addFanfareNote(523.25, start: 0.20, duration: 0.16)
+            addFanfareNote(698.46, start: 0.31, duration: 0.18, peak: 0.40)
+            addResolvingChord(root: 440.00, start: 0.50)
+        }
+
+        playEffect(render(tones: tones, noises: [], gain: 0.82), x: 0.5, proximity: 0.72)
     }
 
     func matchLost() {
-        let motifs: [[(Double, Double)]] = [
-            [(233.08, 196.00), (196.00, 164.81), (174.61, 130.81)],
-            [(261.63, 220.00), (220.00, 174.61), (196.00, 146.83)],
-            [(220.00, 185.00), (185.00, 155.56), (164.81, 123.47)]
-        ]
-        let motifIndex = nonRepeatingIndex(count: motifs.count, excluding: lastLossMotifIndex)
+        let motifIndex = nonRepeatingIndex(count: 4, excluding: lastLossMotifIndex)
         lastLossMotifIndex = motifIndex
-        let motif = motifs[motifIndex]
-        let beat = Double.random(in: 0.24...0.29)
         var tones: [Tone] = []
-        for (index, note) in motif.enumerated() {
-            let start = Double(index) * beat
-            tones.append(Tone(waveform: .sawtooth, startFrequency: note.0, endFrequency: note.1, duration: beat * 1.16, peak: 0.28, startTime: start, attack: 0.025))
-            tones.append(Tone(waveform: .triangle, startFrequency: note.0 * 0.5, endFrequency: note.1 * 0.5, duration: beat * 1.2, peak: 0.18, startTime: start, attack: 0.03))
+        var noises: [Noise] = []
+
+        func addDirgeNote(_ frequency: Double, start: TimeInterval, duration: TimeInterval, peak: Double = 0.30) {
+            tones.append(Tone(waveform: .triangle, startFrequency: frequency, endFrequency: nil, duration: duration, peak: peak, startTime: start, attack: 0.026))
+            tones.append(Tone(waveform: .sine, startFrequency: frequency * 0.5, endFrequency: nil, duration: duration * 1.03, peak: peak * 0.18, startTime: start, attack: 0.035))
         }
-        playEffect(render(tones: tones, noises: [], gain: Double.random(in: 0.68...0.78), lowPass: 1_600), x: 0.5, proximity: 0.6)
+
+        func addSplat(start: TimeInterval) {
+            tones.append(Tone(waveform: .triangle, startFrequency: 146.83, endFrequency: 82.41, duration: 0.18, peak: 0.16, startTime: start, attack: 0.003))
+            noises.append(Noise(duration: 0.16, peak: 0.34, lowPass: 900, startTime: start + 0.01))
+        }
+
+        switch motifIndex {
+        case 0:
+            tones.append(Tone(waveform: .sawtooth, startFrequency: 196.00, endFrequency: 174.61, duration: 0.38, peak: 0.22, startTime: 0.00, attack: 0.05))
+            tones.append(Tone(waveform: .sawtooth, startFrequency: 174.61, endFrequency: 146.83, duration: 0.44, peak: 0.24, startTime: 0.42, attack: 0.05))
+            tones.append(Tone(waveform: .triangle, startFrequency: 98.00, endFrequency: 82.41, duration: 0.44, peak: 0.11, startTime: 0.42, attack: 0.06))
+            addDirgeNote(130.81, start: 0.92, duration: 0.34, peak: 0.26)
+            addSplat(start: 1.36)
+        case 1:
+            addDirgeNote(329.63, start: 0.00, duration: 0.18, peak: 0.29)
+            addDirgeNote(311.13, start: 0.20, duration: 0.16, peak: 0.28)
+            addDirgeNote(293.66, start: 0.38, duration: 0.16, peak: 0.28)
+            addDirgeNote(261.63, start: 0.58, duration: 0.30, peak: 0.30)
+            addDirgeNote(220.00, start: 0.94, duration: 0.34, peak: 0.28)
+            addSplat(start: 1.38)
+        case 2:
+            tones.append(Tone(waveform: .sawtooth, startFrequency: 220.00, endFrequency: 196.00, duration: 0.34, peak: 0.21, startTime: 0.00, attack: 0.05))
+            tones.append(Tone(waveform: .sawtooth, startFrequency: 196.00, endFrequency: 164.81, duration: 0.42, peak: 0.23, startTime: 0.38, attack: 0.05))
+            tones.append(Tone(waveform: .triangle, startFrequency: 110.00, endFrequency: 92.50, duration: 0.42, peak: 0.10, startTime: 0.38, attack: 0.06))
+            addDirgeNote(146.83, start: 0.86, duration: 0.34, peak: 0.25)
+            addSplat(start: 1.30)
+        default:
+            addDirgeNote(349.23, start: 0.00, duration: 0.18, peak: 0.28)
+            addDirgeNote(329.63, start: 0.20, duration: 0.16, peak: 0.27)
+            addDirgeNote(311.13, start: 0.38, duration: 0.16, peak: 0.27)
+            addDirgeNote(293.66, start: 0.58, duration: 0.26, peak: 0.29)
+            addDirgeNote(246.94, start: 0.90, duration: 0.34, peak: 0.27)
+            addSplat(start: 1.34)
+        }
+
+        playEffect(render(tones: tones, noises: noises, gain: 0.72, lowPass: 1_800), x: 0.5, proximity: 0.6)
     }
 
     private func makeVoices(count: Int) -> [SpatialVoice] {
@@ -539,7 +638,7 @@ final class GameAudioEngine {
     private func makeTrackingVoices(count: Int) -> [SpatialVoice] {
         (0..<count).map { _ in
             let voice = SpatialVoice()
-            configureTracking(voice: voice)
+            configure(voice: voice)
             return voice
         }
     }
@@ -555,16 +654,6 @@ final class GameAudioEngine {
         voice.wetPlayer.sourceMode = .spatializeIfMono
         voice.wetPlayer.renderingAlgorithm = .HRTFHQ
         voice.wetPlayer.reverbBlend = 100
-    }
-
-    private func configureTracking(voice: SpatialVoice) {
-        engine.attach(voice.dryPlayer)
-        engine.attach(voice.wetPlayer)
-        engine.connect(voice.dryPlayer, to: trackingMixer, format: trackingFormat)
-        engine.connect(voice.wetPlayer, to: trackingMixer, format: trackingFormat)
-        voice.dryPlayer.reverbBlend = 0
-        voice.wetPlayer.reverbBlend = 0
-        voice.wetPlayer.volume = 0
     }
 
     private func ensureEngineRunning() -> Bool {
@@ -600,13 +689,7 @@ final class GameAudioEngine {
         guard ensureEngineRunning() else { return }
         let voice = puckVoices[nextPuckVoice]
         nextPuckVoice = (nextPuckVoice + 1) % puckVoices.count
-        let stereoBuffer = pannedTrackingBuffer(from: buffer, x: x)
-        if voice.dryPlayer.isPlaying { voice.dryPlayer.stop() }
-        voice.dryPlayer.pan = 0
-        voice.dryPlayer.volume = 1
-        voice.dryPlayer.scheduleBuffer(stereoBuffer)
-        voice.dryPlayer.play()
-        if voice.wetPlayer.isPlaying { voice.wetPlayer.stop() }
+        play(buffer, on: voice, x: x, proximity: proximity)
     }
 
     private func playEffect(_ buffer: AVAudioPCMBuffer, x: Double, proximity: Double) {
@@ -618,59 +701,41 @@ final class GameAudioEngine {
     private func play(_ buffer: AVAudioPCMBuffer, on voice: SpatialVoice, x: Double, proximity: Double) {
         guard ensureEngineRunning() else { return }
         let position = spatialPosition(x: x, proximity: proximity)
+        let gain = Float(spatialEdgeGain(x: x))
         if voice.dryPlayer.isPlaying { voice.dryPlayer.stop() }
         voice.dryPlayer.position = position
-        voice.dryPlayer.volume = 1
+        voice.dryPlayer.volume = gain
         voice.dryPlayer.scheduleBuffer(buffer)
         voice.dryPlayer.play()
 
         if reverbStyle > 0 {
             if voice.wetPlayer.isPlaying { voice.wetPlayer.stop() }
             voice.wetPlayer.position = position
-            voice.wetPlayer.volume = 1
+            voice.wetPlayer.volume = gain
             voice.wetPlayer.scheduleBuffer(buffer)
             voice.wetPlayer.play()
         }
     }
 
     private func configureSpatialEnvironment(_ environment: AVAudioEnvironmentNode) {
+        environment.outputType = .headphones
         environment.listenerPosition = AVAudio3DPoint(x: 0, y: 0, z: 0)
         environment.listenerAngularOrientation = AVAudio3DAngularOrientation(yaw: 0, pitch: 0, roll: 0)
-        environment.distanceAttenuationParameters.distanceAttenuationModel = .inverse
-        environment.distanceAttenuationParameters.referenceDistance = 0.8
+        environment.distanceAttenuationParameters.distanceAttenuationModel = .linear
+        environment.distanceAttenuationParameters.referenceDistance = 1
         environment.distanceAttenuationParameters.maximumDistance = 30
         environment.distanceAttenuationParameters.rolloffFactor = 0
     }
 
     private func spatialPosition(x: Double, proximity: Double) -> AVAudio3DPoint {
-        let horizontal = Float((clamp(x) - 0.5) * 4.8)
-        let depth = Float(-(0.5 + (1 - clamp(proximity)) * 5.0))
+        let horizontal = Float((clamp(x) - 0.5) * 24)
+        let depth = Float(-(0.35 + (1 - clamp(proximity)) * 6.0))
         return AVAudio3DPoint(x: horizontal, y: 0, z: depth)
     }
 
-    private func pannedTrackingBuffer(from monoBuffer: AVAudioPCMBuffer, x: Double) -> AVAudioPCMBuffer {
-        let frameCount = Int(monoBuffer.frameLength)
-        let stereoBuffer = AVAudioPCMBuffer(pcmFormat: trackingFormat, frameCapacity: AVAudioFrameCount(frameCount))!
-        stereoBuffer.frameLength = monoBuffer.frameLength
-        guard
-            let monoSamples = monoBuffer.floatChannelData?[0],
-            let stereoSamples = stereoBuffer.floatChannelData
-        else {
-            return stereoBuffer
-        }
-
-        let pan = clamp(x)
-        let leftGain = cos(pan * Double.pi / 2)
-        let rightGain = sin(pan * Double.pi / 2)
-        let leftSamples = stereoSamples[0]
-        let rightSamples = stereoSamples[1]
-
-        for frame in 0..<frameCount {
-            let sample = monoSamples[frame]
-            leftSamples[frame] = sample * Float(leftGain)
-            rightSamples[frame] = sample * Float(rightGain)
-        }
-        return stereoBuffer
+    private func spatialEdgeGain(x: Double) -> Double {
+        let edgeAmount = abs(clamp(x) - 0.5) * 2
+        return 1.0 + 0.34 * edgeAmount
     }
 
     private func renderMalletSlideLoop() -> AVAudioPCMBuffer {
@@ -719,12 +784,29 @@ final class GameAudioEngine {
                 state: &smoothPuckRenderState,
                 previewEnvelope: false
             )
-            let buffer = pannedTrackingBuffer(from: monoBuffer, x: smoothPuckRenderX)
             smoothPuckDryQueuedBuffers += 1
-            smoothPuckVoice.dryPlayer.scheduleBuffer(buffer) { [weak self] in
+            smoothPuckVoice.dryPlayer.scheduleBuffer(monoBuffer) { [weak self] in
                 Task { @MainActor [weak self] in
                     guard let self, generation == self.smoothPuckGeneration else { return }
                     self.smoothPuckDryQueuedBuffers = max(0, self.smoothPuckDryQueuedBuffers - 1)
+                    self.primeSmoothPuckQueue(generation: generation)
+                }
+            }
+        }
+        while reverbStyle > 0, smoothPuckWetQueuedBuffers < 2 {
+            let monoBuffer = renderSmoothPuckBuffer(
+                style: smoothPuckStyle,
+                speed: smoothPuckRenderSpeed,
+                pitchMultiplier: smoothPuckPitchMultiplier,
+                rattleEnergy: smoothPuckRattleEnergy,
+                state: &smoothPuckWetRenderState,
+                previewEnvelope: false
+            )
+            smoothPuckWetQueuedBuffers += 1
+            smoothPuckVoice.wetPlayer.scheduleBuffer(monoBuffer) { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self, generation == self.smoothPuckGeneration else { return }
+                    self.smoothPuckWetQueuedBuffers = max(0, self.smoothPuckWetQueuedBuffers - 1)
                     self.primeSmoothPuckQueue(generation: generation)
                 }
             }
@@ -984,7 +1066,11 @@ final class GameAudioEngine {
                 frequency = tone.startFrequency
             }
             phase += 2 * Double.pi * frequency / sampleRate
-            let envelope = amplitudeEnvelope(time: time, duration: tone.duration, attack: tone.attack, peak: tone.peak)
+            var envelope = amplitudeEnvelope(time: time, duration: tone.duration, attack: tone.attack, peak: tone.peak)
+            if tone.tremoloRate > 0, tone.tremoloDepth > 0 {
+                let tremolo = 1 - tone.tremoloDepth * (0.5 + 0.5 * sin(2 * Double.pi * tone.tremoloRate * time))
+                envelope *= tremolo
+            }
             samples[startFrame + frame] += Float(waveformSample(phase: phase, waveform: tone.waveform) * envelope * gain)
         }
     }

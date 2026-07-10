@@ -40,7 +40,7 @@ final class GameHapticsEngine {
         guard now - (lastPlayed[cue] ?? 0) >= cooldown(for: cue) else { return }
         lastPlayed[cue] = now
 
-        let levelScale = level == .subtle ? 0.52 : 1.0
+        let levelScale = level == .subtle ? 1.0 : 1.45
         let strengthScale = min(max(strength, 0.25), 1)
         let scale = Float(levelScale * strengthScale)
         let events = events(for: cue, scale: scale, intense: level == .intense)
@@ -56,47 +56,76 @@ final class GameHapticsEngine {
     private func events(for cue: Cue, scale: Float, intense: Bool) -> [CHHapticEvent] {
         switch cue {
         case .serve:
-            return [
+            var result = [
                 transient(intensity: 0.48 * scale, sharpness: 0.25, time: 0),
                 transient(intensity: 0.30 * scale, sharpness: 0.42, time: 0.075)
             ]
+            if intense {
+                result.append(transient(intensity: 0.42 * scale, sharpness: 0.55, time: 0.15))
+            }
+            return result
         case .playerStrike:
             var result = [
                 transient(intensity: 1.0 * scale, sharpness: 0.82, time: 0),
                 transient(intensity: 0.48 * scale, sharpness: 0.58, time: 0.035)
             ]
-            if intense { result.append(transient(intensity: 0.26 * scale, sharpness: 0.35, time: 0.075)) }
+            if intense {
+                result.append(continuous(intensity: 0.56 * scale, sharpness: 0.42, time: 0.018, duration: 0.055))
+                result.append(transient(intensity: 0.44 * scale, sharpness: 0.35, time: 0.085))
+            }
             return result
         case .computerStrike:
-            return [
+            var result = [
                 transient(intensity: 0.58 * scale, sharpness: 0.50, time: 0),
                 transient(intensity: 0.24 * scale, sharpness: 0.35, time: 0.045)
             ]
+            if intense {
+                result.append(transient(intensity: 0.36 * scale, sharpness: 0.45, time: 0.095))
+            }
+            return result
         case .wall:
             var result = [
                 transient(intensity: 0.82 * scale, sharpness: 0.92, time: 0),
                 transient(intensity: 0.34 * scale, sharpness: 0.72, time: 0.028)
             ]
-            if intense { result.append(transient(intensity: 0.18 * scale, sharpness: 0.55, time: 0.06)) }
+            if intense {
+                result.append(continuous(intensity: 0.44 * scale, sharpness: 0.70, time: 0.012, duration: 0.045))
+                result.append(transient(intensity: 0.34 * scale, sharpness: 0.55, time: 0.07))
+            }
             return result
         case .goal:
-            return [
+            var result = [
                 transient(intensity: 0.58 * scale, sharpness: 0.35, time: 0),
                 transient(intensity: 0.78 * scale, sharpness: 0.48, time: 0.09),
                 transient(intensity: 1.0 * scale, sharpness: 0.68, time: 0.18)
             ]
+            if intense {
+                result.append(continuous(intensity: 0.72 * scale, sharpness: 0.36, time: 0.02, duration: 0.24))
+                result.append(transient(intensity: 0.85 * scale, sharpness: 0.62, time: 0.29))
+            }
+            return result
         case .boardBall:
-            return [
+            var result = [
                 continuous(intensity: 0.82 * scale, sharpness: 0.22, time: 0, duration: 0.13),
                 transient(intensity: 1.0 * scale, sharpness: 0.92, time: 0.04),
                 transient(intensity: 0.58 * scale, sharpness: 0.52, time: 0.16)
             ]
+            if intense {
+                result.append(continuous(intensity: 0.72 * scale, sharpness: 0.42, time: 0.11, duration: 0.14))
+                result.append(transient(intensity: 0.70 * scale, sharpness: 0.78, time: 0.25))
+            }
+            return result
         case .gameOver:
-            return [
+            var result = [
                 continuous(intensity: 0.50 * scale, sharpness: 0.18, time: 0, duration: 0.18),
                 continuous(intensity: 0.72 * scale, sharpness: 0.28, time: 0.20, duration: 0.24),
                 transient(intensity: 0.85 * scale, sharpness: 0.42, time: 0.46)
             ]
+            if intense {
+                result.append(continuous(intensity: 0.92 * scale, sharpness: 0.35, time: 0.50, duration: 0.22))
+                result.append(transient(intensity: 1.0 * scale, sharpness: 0.60, time: 0.76))
+            }
+            return result
         }
     }
 
