@@ -79,7 +79,7 @@ final class GameModel: ObservableObject {
     static func puckPulseInterval(speed: Int, speedsUpWhenApproaching: Bool, proximity: Double) -> TimeInterval {
         let clampedProximity = min(max(proximity, 0), 1)
         let speed = min(max(speed, 0), 2)
-        let nearIntervals = [0.30, 0.16, 0.058]
+        let nearIntervals = [0.30, 0.16, 0.092]
         let selectedInterval = nearIntervals[speed]
         guard speedsUpWhenApproaching else { return selectedInterval }
         let farAdditions = [0.22, 0.22, 0.192]
@@ -250,16 +250,15 @@ final class GameModel: ObservableObject {
         movePlayer(to: point)
     }
 
-    func touchEnded(wasTap: Bool, at point: CGPoint) {
+    func touchEnded(wasTap: Bool, at _: CGPoint) {
         audio.stopMalletSlide()
-        let wasPlacingPuck = placingPuck
         placingPuck = false
-        guard wasTap, !wasPlacingPuck else { return }
+        guard wasTap else { return }
         let now = Date.timeIntervalSinceReferenceDate
         let window = phase == .gameOver || phase == .training ? 0.65 : 0.4
         tapCount = now - lastTapTime < window ? tapCount + 1 : 1
         lastTapTime = now
-        if (phase == .waitingForServe || phase == .placedServe), point.y < Self.center, tapCount >= 2 {
+        if (phase == .waitingForServe || phase == .placedServe || phase == .live), tapCount >= 2 {
             togglePause()
             tapCount = 0
         } else if phase == .gameOver {
@@ -274,7 +273,6 @@ final class GameModel: ObservableObject {
                 scheduleGameOverRestart()
             }
         } else if phase == .training, tapCount >= 2 { NotificationCenter.default.post(name: .trainingFinished, object: nil); tapCount = 0 }
-        else if phase == .live, tapCount >= 2 { togglePause(); tapCount = 0 }
     }
 
     func togglePause() {
@@ -682,7 +680,7 @@ final class GameModel: ObservableObject {
 
     private func updatePuckAudio(now: TimeInterval) {
         let proximity = Self.playerProximity(forY: puck.y)
-        if !training, settings.puckTrackingStyle == .smooth {
+        if settings.puckTrackingStyle == .smooth {
             audio.updateSmoothPuck(
                 style: settings.smoothPuckSound,
                 x: puck.x / Self.width,
@@ -703,7 +701,7 @@ final class GameModel: ObservableObject {
             speedsUpWhenApproaching: settings.speedsUpWhenApproaching,
             proximity: proximity
         )
-        nextPingTime = now + max(0.055, base)
+        nextPingTime = now + max(0.085, base)
         audio.puckPing(
             x: puck.x / Self.width,
             distance: proximity,

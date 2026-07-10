@@ -259,8 +259,40 @@ final class GameAudioEngine {
         }
 
         let cutoff = 2_000 + 16_000 * near
-        let buffer = render(tones: tones, noises: noises, gain: gain, lowPass: cutoff)
+        let pulseClarity = near > 0.78 ? 0.78 : 1.0
+        let buffer = render(
+            tones: tones.map { shortened(tone: $0, scale: pulseClarity) },
+            noises: noises.map { shortened(noise: $0, scale: pulseClarity) },
+            gain: gain,
+            lowPass: cutoff
+        )
         playPuck(buffer, x: x, proximity: near)
+    }
+
+    private func shortened(tone: Tone, scale: Double) -> Tone {
+        guard scale < 1 else { return tone }
+        return Tone(
+            waveform: tone.waveform,
+            startFrequency: tone.startFrequency,
+            endFrequency: tone.endFrequency,
+            duration: tone.duration * scale,
+            peak: tone.peak,
+            startTime: tone.startTime,
+            attack: tone.attack,
+            tremoloRate: tone.tremoloRate,
+            tremoloDepth: tone.tremoloDepth
+        )
+    }
+
+    private func shortened(noise: Noise, scale: Double) -> Noise {
+        guard scale < 1 else { return noise }
+        return Noise(
+            duration: noise.duration * scale,
+            peak: noise.peak,
+            highPass: noise.highPass,
+            lowPass: noise.lowPass,
+            startTime: noise.startTime
+        )
     }
 
     func updateSmoothPuck(style: Int, x: Double, proximity: Double, speed: Double, volume: Double, pitchBehavior: Int, pitchChangesWithDistance: Bool, lowerWhenCloser: Bool, volumeChangesWithDistance: Bool) {
@@ -319,6 +351,7 @@ final class GameAudioEngine {
 
     func previewSmoothPuck(style: Int, x: Double, proximity: Double, speed: Double, volume: Double, pitchBehavior: Int, pitchChangesWithDistance: Bool, lowerWhenCloser: Bool, volumeChangesWithDistance: Bool) {
         stopSmoothPuck()
+        stopPuckPreviewVoices()
         guard volume > 0 else { return }
         guard ensureEngineRunning() else { return }
         let near = clamp(proximity)
@@ -348,6 +381,15 @@ final class GameAudioEngine {
         smoothPuckWetQueuedBuffers = 0
         smoothPuckRenderState = SmoothPuckRenderState()
         smoothPuckWetRenderState = SmoothPuckRenderState()
+    }
+
+    private func stopPuckPreviewVoices() {
+        for voice in puckVoices {
+            voice.dryPlayer.volume = 0
+            voice.wetPlayer.volume = 0
+            if voice.dryPlayer.isPlaying { voice.dryPlayer.stop() }
+            if voice.wetPlayer.isPlaying { voice.wetPlayer.stop() }
+        }
     }
 
     func energizeSmoothPuck(amount: Double) {
@@ -772,14 +814,18 @@ final class GameAudioEngine {
     }
 
     private func spatialPosition(x: Double, proximity: Double) -> AVAudio3DPoint {
-        let horizontal = Float((clamp(x) - 0.5) * 24)
-        let depth = Float(-(0.35 + (1 - clamp(proximity)) * 6.0))
+        let normalized = clamp(x) * 2 - 1
+        let near = clamp(proximity)
+        let nearWeight = near * near
+        let horizontalSpread = 6.2 - 1.6 * nearWeight
+        let horizontal = Float(normalized * horizontalSpread)
+        let depth = Float(-(0.95 + (1 - near) * 5.4))
         return AVAudio3DPoint(x: horizontal, y: 0, z: depth)
     }
 
     private func spatialEdgeGain(x: Double) -> Double {
         let edgeAmount = abs(clamp(x) - 0.5) * 2
-        return 1.0 + 0.34 * edgeAmount
+        return 1.0 + 0.18 * edgeAmount
     }
 
     private func renderMalletSlideLoop() -> AVAudioPCMBuffer {
