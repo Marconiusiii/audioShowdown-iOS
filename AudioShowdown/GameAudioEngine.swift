@@ -474,7 +474,7 @@ final class GameAudioEngine {
                 Tone(waveform: .sawtooth, startFrequency: 160, endFrequency: nil, duration: 0.5, peak: 0.5),
                 Tone(waveform: .sawtooth, startFrequency: 120, endFrequency: nil, duration: 0.5, peak: 0.45, startTime: 0.12)
             ]
-            playEffect(render(tones: tones, noises: [], gain: 0.6), x: 0.5, proximity: 0.4)
+            playEffect(render(tones: tones, noises: [], gain: 0.42), x: 0.5, proximity: 0.4)
         }
     }
 
@@ -489,7 +489,7 @@ final class GameAudioEngine {
     }
 
     func matchWon() {
-        let motifIndex = nonRepeatingIndex(count: 3, excluding: lastWinMotifIndex)
+        let motifIndex = nonRepeatingIndex(count: 4, excluding: lastWinMotifIndex)
         lastWinMotifIndex = motifIndex
         var tones: [Tone] = []
 
@@ -518,62 +518,106 @@ final class GameAudioEngine {
             ))
         }
 
-        func addTensionPad(_ frequencies: [Double], start: TimeInterval = 0, duration: TimeInterval = 0.78) {
+        func addTensionPad(_ frequencies: [Double], start: TimeInterval = 0, duration: TimeInterval = 0.68) {
             for (index, frequency) in frequencies.enumerated() {
                 tones.append(Tone(
                     waveform: .sine,
                     startFrequency: frequency,
                     endFrequency: nil,
                     duration: duration,
-                    peak: index == 0 ? 0.050 : 0.040,
+                    peak: index == 0 ? 0.046 : 0.036,
                     startTime: start,
                     attack: duration * (0.72 + Double(index) * 0.06),
                     tremoloRate: 4.2,
-                    tremoloDepth: 0.035
+                    tremoloDepth: 0.03
                 ))
             }
         }
 
-        func addResolvingChord(root: Double, start: TimeInterval, duration: TimeInterval = 0.96) {
-            let chord = [
-                (root * 0.5, 0.20),
-                (root * 2, 0.11)
-            ]
-            for tone in chord {
+        func addResolvingPad(_ frequency: Double, start: TimeInterval, duration: TimeInterval = 0.88) {
+            tones.append(Tone(
+                waveform: .sine,
+                startFrequency: frequency,
+                endFrequency: nil,
+                duration: duration,
+                peak: 0.034,
+                startTime: start,
+                attack: 0.14
+            ))
+        }
+
+        func addBassLine(_ notes: [(Double, TimeInterval, TimeInterval, Double)]) {
+            for note in notes {
                 tones.append(Tone(
                     waveform: .sine,
-                    startFrequency: tone.0,
+                    startFrequency: note.0,
                     endFrequency: nil,
-                    duration: duration,
-                    peak: tone.1,
-                    startTime: start,
-                    attack: 0.085
+                    duration: note.2,
+                    peak: note.3,
+                    startTime: note.1,
+                    attack: 0.008
                 ))
             }
         }
 
+        addTensionPad([261.63, 293.66, 329.63])
         switch motifIndex {
         case 0:
-            addTensionPad([587.33, 783.99, 880.00])
+            addBassLine([
+                (261.63, 0.00, 0.16, 0.36),
+                (220.00, 0.11, 0.16, 0.34),
+                (196.00, 0.22, 0.16, 0.34),
+                (174.61, 0.33, 0.16, 0.32),
+                (130.81, 0.44, 0.34, 0.30)
+            ])
             addFanfareNote(523.25, start: 0.00, duration: 0.16)
             addFanfareNote(659.25, start: 0.11, duration: 0.16)
             addFanfareNote(783.99, start: 0.22, duration: 0.16)
-            addFanfareNote(1_046.50, start: 0.33, duration: 0.18, peak: 0.42)
-            addResolvingChord(root: 659.25, start: 0.52)
+            addFanfareNote(698.46, start: 0.33, duration: 0.16, peak: 0.34)
+            addResolvingPad(1_046.50, start: 0.44)
+            addFanfareNote(1_046.50, start: 0.44, duration: 0.36, peak: 0.34)
         case 1:
-            addTensionPad([440.00, 587.33, 659.25])
-            addFanfareNote(392.00, start: 0.00, duration: 0.15)
-            addFanfareNote(493.88, start: 0.10, duration: 0.15)
+            addBassLine([
+                (261.63, 0.00, 0.15, 0.36),
+                (246.94, 0.10, 0.15, 0.34),
+                (220.00, 0.20, 0.15, 0.34),
+                (196.00, 0.31, 0.16, 0.32),
+                (130.81, 0.42, 0.34, 0.30)
+            ])
+            addFanfareNote(523.25, start: 0.00, duration: 0.15)
+            addFanfareNote(587.33, start: 0.10, duration: 0.15)
+            addFanfareNote(554.37, start: 0.20, duration: 0.15)
+            addFanfareNote(783.99, start: 0.31, duration: 0.16, peak: 0.38)
+            addResolvingPad(1_046.50, start: 0.42)
+            addFanfareNote(1_046.50, start: 0.42, duration: 0.36, peak: 0.34)
+        case 2:
+            addBassLine([
+                (261.63, 0.00, 0.15, 0.36),
+                (196.00, 0.10, 0.15, 0.34),
+                (220.00, 0.20, 0.15, 0.34),
+                (174.61, 0.31, 0.16, 0.32),
+                (130.81, 0.42, 0.34, 0.30)
+            ])
+            addFanfareNote(523.25, start: 0.00, duration: 0.15)
+            addFanfareNote(659.25, start: 0.10, duration: 0.15)
             addFanfareNote(587.33, start: 0.20, duration: 0.15)
-            addFanfareNote(783.99, start: 0.31, duration: 0.18, peak: 0.40)
-            addResolvingChord(root: 493.88, start: 0.50)
+            addFanfareNote(880.00, start: 0.31, duration: 0.16, peak: 0.36)
+            addResolvingPad(1_046.50, start: 0.42)
+            addFanfareNote(1_046.50, start: 0.42, duration: 0.36, peak: 0.34)
         default:
-            addTensionPad([392.00, 523.25, 587.33])
-            addFanfareNote(349.23, start: 0.00, duration: 0.15)
-            addFanfareNote(440.00, start: 0.10, duration: 0.15)
-            addFanfareNote(523.25, start: 0.20, duration: 0.16)
-            addFanfareNote(698.46, start: 0.31, duration: 0.18, peak: 0.40)
-            addResolvingChord(root: 440.00, start: 0.50)
+            addBassLine([
+                (261.63, 0.00, 0.15, 0.36),
+                (246.94, 0.10, 0.15, 0.34),
+                (196.00, 0.20, 0.15, 0.34),
+                (220.00, 0.31, 0.16, 0.32),
+                (130.81, 0.42, 0.34, 0.30)
+            ])
+            addFanfareNote(523.25, start: 0.00, duration: 0.15)
+            addFanfareNote(587.33, start: 0.10, duration: 0.15)
+            addFanfareNote(659.25, start: 0.20, duration: 0.15)
+            addFanfareNote(783.99, start: 0.31, duration: 0.16, peak: 0.38)
+            addResolvingPad(1_046.50, start: 0.42)
+            addFanfareNote(1_046.50, start: 0.42, duration: 0.36, peak: 0.34)
         }
 
         playEffect(render(tones: tones, noises: [], gain: 0.82), x: 0.5, proximity: 0.72)

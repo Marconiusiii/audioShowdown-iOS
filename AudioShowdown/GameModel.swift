@@ -38,12 +38,14 @@ final class GameModel: ObservableObject {
     private var lastTapTime: TimeInterval = 0
     private var pendingGameOverRestart: DispatchWorkItem?
     private var pendingGameOverAnnouncement: DispatchWorkItem?
+    private var serveInputLockedUntil: TimeInterval = 0
     private var placingPuck = false
     private var playerAirHockeyServeCount = 1
     private var computerAirHockeyServeCount = 0
     private var lastPlayerStrikeTime: TimeInterval = 0
     private var lastOpponentStrikeTime: TimeInterval = 0
     private var lastRicochetTime: TimeInterval = 0
+    private var recentSideWallHits: [TimeInterval] = []
     private var lastHitByPlayer: Bool?
     private var progressY = 600.0
     private var progressTime: TimeInterval = 0
@@ -197,6 +199,9 @@ final class GameModel: ObservableObject {
             return
         }
         guard phase == .waitingForServe || phase == .placedServe || phase == .live else { return }
+        if phase == .waitingForServe || phase == .placedServe {
+            guard Date.timeIntervalSinceReferenceDate >= serveInputLockedUntil else { return }
+        }
         if (phase == .waitingForServe || phase == .placedServe), point.y < Self.center {
             return
         }
@@ -301,6 +306,7 @@ final class GameModel: ObservableObject {
         playerAirHockeyServeCount = 1; computerAirHockeyServeCount = 0
         phaseBeforePause = nil
         puck = Disc(x: 300, y: 600); phase = .waitingForServe; previousTime = nil
+        recentSideWallHits = []
         resetPuckRecoveryState()
         announce(serveAnnouncement)
     }
@@ -351,12 +357,16 @@ final class GameModel: ObservableObject {
 
     private func collideWithWalls() {
         var hitWall = false
-        if puck.x < puckRadius { puck.x = puckRadius; puck.vx = abs(puck.vx) * Self.wallRestitution; hitWall = true }
-        if puck.x > Self.width - puckRadius { puck.x = Self.width - puckRadius; puck.vx = -abs(puck.vx) * Self.wallRestitution; hitWall = true }
+        var hitSideWall = false
+        if puck.x < puckRadius { puck.x = puckRadius; puck.vx = abs(puck.vx) * Self.wallRestitution; hitWall = true; hitSideWall = true }
+        if puck.x > Self.width - puckRadius { puck.x = Self.width - puckRadius; puck.vx = -abs(puck.vx) * Self.wallRestitution; hitWall = true; hitSideWall = true }
         if puck.y < puckRadius, abs(puck.x - 300) >= Self.goalHalfWidth { puck.y = puckRadius; puck.vy = abs(puck.vy) * Self.wallRestitution; hitWall = true }
         if puck.y > Self.height - puckRadius, abs(puck.x - 300) >= Self.goalHalfWidth { puck.y = Self.height - puckRadius; puck.vy = -abs(puck.vy) * Self.wallRestitution; hitWall = true }
         if hitWall {
             let now = Date.timeIntervalSinceReferenceDate
+            if hitSideWall {
+                softenSideWallRally(now: now)
+            }
             guard now - lastRicochetTime >= 0.055 else { return }
             lastRicochetTime = now
             let impactSpeed = hypot(puck.vx, puck.vy)
@@ -393,7 +403,7 @@ final class GameModel: ObservableObject {
         let dx = puck.x - playerMallet.x
         let dy = puck.y - playerMallet.y
         let distance = hypot(dx, dy)
-        let minimum = puckRadius + 44
+        let minimum = puckRadius + playerAssistRadius()
         guard distance < minimum else { return }
         let nx: Double
         let ny: Double
@@ -424,7 +434,7 @@ final class GameModel: ObservableObject {
         var dx = puck.x - closestX
         var dy = puck.y - closestY
         var distance = hypot(dx, dy)
-        let minimum = puckRadius + 44
+        let minimum = puckRadius + playerAssistRadius()
         guard distance < minimum else { return false }
         if distance < 0.001 {
             dx = 0
@@ -474,6 +484,34 @@ final class GameModel: ObservableObject {
         let capped = Self.cappedVelocity(vx: puck.vx, vy: puck.vy)
         puck.vx = capped.vx
         puck.vy = capped.vy
+    }
+
+    private func playerAssistRadius() -> Double {
+        50
+    }
+
+    private func softenSideWallRally(now: TimeInterval) {
+        recentSideWallHits.append(now)
+        recentSideWallHits.removeAll { now - $0 > 1.15 }
+        guard recentSideWallHits.count >= 4 else { return }
+        let horizontal = abs(puck.vx)
+        let vertical = abs(puck.vy)
+        guard horizontal > 520, horizontal > vertical * 2.7 else { return }
+        let direction: Double
+        if abs(puck.vy) > 1 {
+            direction = puck.vy > 0 ? 1 : -1
+        } else if let lastHitByPlayer {
+            direction = lastHitByPlayer ? -1 : 1
+        } else {
+            direction = puck.y >= Self.center ? -1 : 1
+        }
+        let speed = hypot(puck.vx, puck.vy)
+        let targetVy = min(max(210, speed * 0.24), speed * 0.40)
+        let reducedVx = puck.vx * 0.82
+        puck.vx = reducedVx
+        puck.vy = direction * max(vertical, targetVy)
+        capPuckSpeed()
+        recentSideWallHits.removeFirst(max(0, recentSideWallHits.count - 2))
     }
 
     private func unpin(from mallet: Disc) -> Bool {
@@ -578,6 +616,7 @@ final class GameModel: ObservableObject {
             haptics.play(.goal, level: settings.haptics)
             phase = .waitingForServe; puck = Disc(x: 300, y: 600)
             resetPuckRecoveryState()
+            lockServeInput(for: 1.1)
             announce(serveAnnouncement)
         }
     }
@@ -604,6 +643,7 @@ final class GameModel: ObservableObject {
             )
         } else {
             phase = .waitingForServe
+            lockServeInput(for: 1.1)
             announce("Board Ball. \(againstPlayer ? "Computer" : "You") scores one point. \(serveAnnouncement)")
         }
     }
@@ -634,6 +674,10 @@ final class GameModel: ObservableObject {
         lastHitByPlayer = nil
         progressY = puck.y
         progressTime = Date.timeIntervalSinceReferenceDate
+    }
+
+    private func lockServeInput(for duration: TimeInterval) {
+        serveInputLockedUntil = Date.timeIntervalSinceReferenceDate + duration
     }
 
     private func updatePuckAudio(now: TimeInterval) {
