@@ -43,16 +43,8 @@ struct GameView: View {
 
             GeometryReader { proxy in
                 let bottomGestureClearance = max(proxy.safeAreaInsets.bottom + 18, 46)
-                VStack(spacing: 0) {
-                    GameSurfaceView(model: model, theme: theme)
-                        .aspectRatio(0.5, contentMode: .fit)
-                        .frame(width: proxy.size.width, height: max(0, proxy.size.height - bottomGestureClearance), alignment: .bottom)
-
-                    Color.clear
-                        .frame(height: bottomGestureClearance)
-                        .accessibilityHidden(true)
-                }
-                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottom)
+                GameSurfaceView(model: model, theme: theme, bottomGestureClearance: bottomGestureClearance)
+                    .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottom)
             }
         }
         .background(theme.background.ignoresSafeArea())

@@ -3,6 +3,7 @@ import SwiftUI
 struct GameSurfaceView: View {
     @ObservedObject var model: GameModel
     let theme: GameTheme
+    let bottomGestureClearance: CGFloat
     @State private var touchStart: CGPoint?
     @State private var moved = false
 
@@ -44,8 +45,13 @@ struct GameSurfaceView: View {
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(theme.line, lineWidth: 3))
     }
 
+    private func playableSize(from size: CGSize) -> CGSize {
+        CGSize(width: size.width, height: max(1, size.height - bottomGestureClearance))
+    }
+
     private func drawTable(context: inout GraphicsContext, size: CGSize) {
-        let scale = min(size.width / GameModel.width, size.height / GameModel.height)
+        let playableSize = playableSize(from: size)
+        let scale = min(playableSize.width / GameModel.width, playableSize.height / GameModel.height)
         let xOffset = (size.width - GameModel.width * scale) / 2
         let tableWidth = GameModel.width * scale
         let tableHeight = GameModel.height * scale
@@ -107,11 +113,12 @@ struct GameSurfaceView: View {
     }
 
     private func tablePoint(_ location: CGPoint, in size: CGSize) -> CGPoint {
-        let scale = min(size.width / GameModel.width, size.height / GameModel.height)
+        let playableSize = playableSize(from: size)
+        let scale = min(playableSize.width / GameModel.width, playableSize.height / GameModel.height)
         let xOffset = (size.width - GameModel.width * scale) / 2
         return CGPoint(
             x: min(max(Double((location.x - xOffset) / scale), 0), GameModel.width),
-            y: min(max(Double(location.y / scale), 0), GameModel.height)
+            y: min(max(Double(min(location.y, playableSize.height) / scale), 0), GameModel.height)
         )
     }
 }
