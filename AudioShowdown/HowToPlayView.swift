@@ -30,8 +30,8 @@ struct HowToPlayView: View {
                     ])
                     section("Follow the Puck", rows: [
                         "Listen for the puck moving left and right in your headphones. It gets louder as it comes closer to your goal, and danger cues speed up when the puck is coming your way.",
-                        "Drag your finger on your half of the table to move your mallet. Protect your goal at the bottom, then smack the puck toward the computer’s goal at the top.",
-                        "Quick taps and short swipes can hit the puck, but dragging keeps your mallet under your finger."
+                        "Drag your finger on your half of the table to move your paddle. Protect your goal at the bottom, then smack the puck toward the computer’s goal at the top.",
+                        "Quick taps and short swipes can hit the puck, but dragging keeps your paddle under your finger."
                     ])
                     section("Serving", rows: [
                         "When it is your serve, touch your half of the table to place the puck. Keep your finger down, then swipe through the puck to serve it.",

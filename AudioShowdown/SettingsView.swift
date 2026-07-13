@@ -183,9 +183,9 @@ struct SettingsView: View {
                             valueChanged: { audioEngine.centerCrossing(volume: $0) }
                         )
 
-                        AppSectionHeading(title: "Mallet Audio", theme: theme)
+                        AppSectionHeading(title: "Paddle Audio", theme: theme)
                         AppAdjustableSliderRow(
-                            title: "Mallet Slide Volume",
+                            title: "Paddle Slide Volume",
                             valueText: "\(Int(settings.malletSlideVolume * 100)) percent",
                             value: $settings.malletSlideVolume,
                             range: 0...1,
