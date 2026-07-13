@@ -20,26 +20,32 @@ struct HowToPlayView: View {
                         .accessibilityAddTraits(.isHeader)
 
                     section("Meet the Table", rows: [
-                        "Audio Showdown is played in portrait. Your half is the bottom half of the table, and your opponent is waiting at the top.",
-                        "Wear headphones. The puck moves through the stereo field, grows louder as it gets closer, and pings faster when danger is headed your way."
+                        "Audio Showdown is played in portrait with headphones. Your goal is at the bottom of the table, and the computer’s goal is at the top.",
+                        "If using VoiceOver, make sure to have Direct Touch turned on for this app in your rotor. Once the match starts, the table becomes a Direct Touch play area. Touch and drag on the table itself to play."
                     ])
-                    section("Get Moving", rows: [
-                        "On your serve, touch your half to place the puck. Keep your finger down and swipe through it to send it flying.",
-                        "Drag anywhere on your half to move your mallet. Protect your goal and wallop the puck into your opponent’s."
+                    section("Follow the Puck", rows: [
+                        "Listen for the puck moving left and right in your headphones. It gets louder as it comes closer to your goal, and danger cues speed up when the puck is coming your way.",
+                        "Drag your finger on your half of the table to move your mallet. Protect your goal at the bottom, then smack the puck toward the computer’s goal at the top.",
+                        "You can tap or swipe your finger in the play area to hit the puck."
+                    ])
+                    section("Serving", rows: [
+                        "When it is your serve, touch your half of the table to place the puck. Keep your finger down, then swipe through the puck to serve it.",
+                        "When it is the computer’s serve, get ready to defend. The serve announcement tells you whose serve it is and what the score is."
                     ])
                     section("Showdown Rules", rows: [
-                        "Goals are worth two points. First to eleven wins, but you need a two-point lead. Each player gets five serves before service changes.",
-                        "A monster hit can smack the center board. That’s a Board Ball: your opponent gets one point and the next serve begins."
+                        "In the main game, goals are worth two points. First to eleven wins, but you need a two-point lead.",
+                        "Each player gets five serves before service changes.",
+                        "A very hard hit can strike the center board. That is a Board Ball. The other player gets one point, and the next serve begins."
                     ])
                     section("Air Hockey Mode", rows: [
-                        "Turn on Air Hockey Mode in Settings for classic one-point goals and alternating serves. First to seven wins."
+                        "Turn on Air Hockey Mode in Settings for a simpler rule set: goals are worth one point, serves alternate after each goal, and first to seven wins."
                     ])
-                    section("Stay in Control", rows: [
-                        "Double-tap the table to pause. The table steps aside so you can resume, change settings, or end the game with ordinary VoiceOver controls.",
+                    section("Pausing and Leaving", rows: [
+                        "Double-tap the table to pause. The Direct Touch area will go away so you can use standard VoiceOver controls to resume, change settings, or end the game.",
                         "After the match, double-tap the table to play again or triple-tap to return home. To leave during a match, pause and choose End Game."
                     ])
-                    section("Where the duck is the puck?", rows: [
-                        "Training mode lets you drag the puck anywhere and chase its sound without a score breathing down your neck. Double-tap the table when you’re done."
+                    section("Practice", rows: [
+                        "Use Where the duck is the puck? to practice without scoring. Drag the puck around the table, listen to how it moves, and double-tap the table when you are done to return to the Home screen."
                     ])
                 }
             }
