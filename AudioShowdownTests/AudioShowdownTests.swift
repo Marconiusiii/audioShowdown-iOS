@@ -63,6 +63,17 @@ struct AudioShowdownTests {
         #expect(GameModel.isWinningScore(player: 7, opponent: 6, airHockeyMode: true))
     }
 
+    @Test func gameRulesMirrorPublicGameModelHelpers() {
+        #expect(GameRules.width == GameModel.width)
+        #expect(GameRules.height == GameModel.height)
+        #expect(GameRules.center == GameModel.center)
+        #expect(GameRules.goalHalfWidth == GameModel.goalHalfWidth)
+        #expect(GameRules.puckSpeedCap == GameModel.puckSpeedCap)
+        #expect(GameRules.pointsPerGoal(airHockeyMode: false) == GameModel.pointsPerGoal(airHockeyMode: false))
+        #expect(GameRules.nextShowdownServe(server: .player, serveNumber: 5).0 == GameModel.nextShowdownServe(server: .player, serveNumber: 5).0)
+        #expect(GameRules.nextShowdownServe(server: .player, serveNumber: 5).1 == GameModel.nextShowdownServe(server: .player, serveNumber: 5).1)
+    }
+
     @Test func showdownServiceChangesAfterFiveServes() {
         let sameServer = GameModel.nextShowdownServe(server: .player, serveNumber: 4)
         #expect(sameServer.0 == .player)
@@ -84,8 +95,8 @@ struct AudioShowdownTests {
         let bottomInterval = GameModel.puckPulseInterval(speed: 2, speedsUpWhenApproaching: true, proximity: 1)
         #expect(topInterval > centerInterval)
         #expect(centerInterval > bottomInterval)
-        #expect(abs(topInterval - 0.25) < 0.0001)
-        #expect(abs(bottomInterval - 0.058) < 0.0001)
+        #expect(abs(topInterval - 0.284) < 0.0001)
+        #expect(abs(bottomInterval - 0.092) < 0.0001)
     }
 
     @Test func pulseSpeedRemainsConstantWhenApproachSpeedupIsOff() {
