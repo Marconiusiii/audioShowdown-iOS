@@ -140,6 +140,20 @@ final class GameModel: ObservableObject {
         }
     }
 
+    func applySnapshot(_ snapshot: GameSnapshot) {
+        puck = snapshot.puck.modelDisc
+        playerMallet = snapshot.playerPaddle.modelDisc
+        opponentMallet = snapshot.opponentPaddle.modelDisc
+        playerScore = snapshot.playerScore
+        opponentScore = snapshot.opponentScore
+        phase = snapshot.phase.modelPhase
+        server = snapshot.server.modelServer
+        serveNumber = snapshot.serveNumber
+        previousTime = nil
+        lastCenterSide = puck.y < Self.center ? -1 : 1
+        resetPuckRecoveryState()
+    }
+
     func tick(_ date: Date) {
         audio.setVolume(settings.volume)
         audio.setReverb(settings.reverbStyle)
@@ -794,8 +808,27 @@ private extension GameModel.Disc {
     }
 }
 
+private extension GameSnapshot.Disc {
+    var modelDisc: GameModel.Disc {
+        GameModel.Disc(x: x, y: y, vx: vx, vy: vy)
+    }
+}
+
 private extension GameModel.Phase {
     var snapshotPhase: GameSnapshot.Phase {
+        switch self {
+        case .waitingForServe: .waitingForServe
+        case .placedServe: .placedServe
+        case .live: .live
+        case .paused: .paused
+        case .gameOver: .gameOver
+        case .training: .training
+        }
+    }
+}
+
+private extension GameSnapshot.Phase {
+    var modelPhase: GameModel.Phase {
         switch self {
         case .waitingForServe: .waitingForServe
         case .placedServe: .placedServe
@@ -816,6 +849,15 @@ private extension GameModel.Server {
     }
 
     var eventSide: GameEvent.Side {
+        switch self {
+        case .player: .player
+        case .opponent: .opponent
+        }
+    }
+}
+
+private extension GameSnapshot.Server {
+    var modelServer: GameModel.Server {
         switch self {
         case .player: .player
         case .opponent: .opponent

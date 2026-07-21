@@ -218,6 +218,77 @@ struct AudioShowdownTests {
         #expect(model.drainEvents().contains { $0.kind == .serve && $0.side == .player })
     }
 
+    @Test func singlePlayerSessionAppliesLocalInputToGameModel() {
+        let suiteName = "AudioShowdownTests.Session.Single.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let session = GameSession(settings: GameSettings(defaults: defaults), training: false, audio: GameAudioEngine())
+
+        session.handleLocalInput(GameInput(phase: .began, x: 280, y: 880, wasTap: nil))
+        session.handleLocalInput(GameInput(phase: .ended, x: 280, y: 880, wasTap: true))
+
+        #expect(session.mode == .singlePlayer)
+        #expect(session.role == .local)
+        #expect(session.snapshot.phase == .placedServe)
+        #expect(session.drainOutgoingInputs().isEmpty)
+        #expect(session.drainOutgoingEvents().contains { $0.kind == .serve && $0.side == .player })
+    }
+
+    @Test func multiplayerGuestQueuesLocalInputWithoutApplyingIt() {
+        let suiteName = "AudioShowdownTests.Session.Guest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = GameModel(settings: GameSettings(defaults: defaults), training: false, audio: GameAudioEngine())
+        let session = GameSession(model: model, mode: .multiplayer, role: .guest)
+
+        session.handleLocalInput(GameInput(phase: .began, x: 280, y: 880, wasTap: nil))
+
+        #expect(!session.appliesLocalInputToModel)
+        #expect(session.snapshot.phase == .waitingForServe)
+        #expect(session.drainOutgoingInputs() == [GameInput(phase: .began, x: 280, y: 880, wasTap: nil)])
+    }
+
+    @Test func multiplayerHostAppliesRemoteInputAndQueuesSnapshots() {
+        let suiteName = "AudioShowdownTests.Session.Host.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = GameModel(settings: GameSettings(defaults: defaults), training: false, audio: GameAudioEngine())
+        let session = GameSession(model: model, mode: .multiplayer, role: .host)
+
+        session.handleRemoteInput(GameInput(phase: .began, x: 280, y: 880, wasTap: nil))
+        session.tick(Date(timeIntervalSinceReferenceDate: 1))
+
+        #expect(session.appliesRemoteInputToModel)
+        #expect(session.snapshot.phase == .placedServe)
+        #expect(session.drainOutgoingSnapshots().last?.phase == .placedServe)
+    }
+
+    @Test func multiplayerGuestAppliesRemoteSnapshotsAndBuffersRemoteEvents() {
+        let suiteName = "AudioShowdownTests.Session.RemoteSnapshot.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = GameModel(settings: GameSettings(defaults: defaults), training: false, audio: GameAudioEngine())
+        let session = GameSession(model: model, mode: .multiplayer, role: .guest)
+        let snapshot = GameSnapshot(
+            puck: GameSnapshot.Disc(x: 240, y: 500, vx: 120, vy: -220),
+            playerPaddle: GameSnapshot.Disc(x: 275, y: 930, vx: 0, vy: 0),
+            opponentPaddle: GameSnapshot.Disc(x: 310, y: 160, vx: 0, vy: 0),
+            playerScore: 4,
+            opponentScore: 2,
+            phase: .live,
+            server: .opponent,
+            serveNumber: 3
+        )
+        let remoteEvent = GameEvent(kind: .centerCrossing, side: .opponent, x: 240, y: 500, speed: 260, playerScore: nil, opponentScore: nil, message: nil)
+
+        session.handleRemoteSnapshot(snapshot)
+        session.handleRemoteEvents([remoteEvent])
+
+        #expect(session.appliesRemoteSnapshotToModel)
+        #expect(session.snapshot == snapshot)
+        #expect(session.drainIncomingEvents() == [remoteEvent])
+    }
+
     @Test func upperHalfDoubleTapPausesBeforeServeIsPlaced() {
         let suiteName = "AudioShowdownTests.ServePause.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
