@@ -54,18 +54,6 @@ final class GameModel: ObservableObject {
     var isGameOver: Bool { phase == .gameOver }
     var scoreText: String { "You: \(playerScore), Computer: \(opponentScore)" }
     var puckRadius: Double { [26, 34, 42][settings.puckSize] }
-    var snapshot: GameSnapshot {
-        GameSnapshot(
-            puck: puck.snapshotDisc,
-            playerPaddle: playerMallet.snapshotDisc,
-            opponentPaddle: opponentMallet.snapshotDisc,
-            playerScore: playerScore,
-            opponentScore: opponentScore,
-            phase: phase.snapshotPhase,
-            server: server.snapshotServer,
-            serveNumber: serveNumber
-        )
-    }
 
     static func pointsPerGoal(airHockeyMode: Bool) -> Int {
         GameRules.pointsPerGoal(airHockeyMode: airHockeyMode)
@@ -738,32 +726,4 @@ final class GameModel: ObservableObject {
 extension Notification.Name {
     static let trainingFinished = Notification.Name("AudioShowdownTrainingFinished")
     static let gameOverReturnHome = Notification.Name("AudioShowdownGameOverReturnHome")
-}
-
-private extension GameModel.Disc {
-    var snapshotDisc: GameSnapshot.Disc {
-        GameSnapshot.Disc(x: x, y: y, vx: vx, vy: vy)
-    }
-}
-
-private extension GameModel.Phase {
-    var snapshotPhase: GameSnapshot.Phase {
-        switch self {
-        case .waitingForServe: .waitingForServe
-        case .placedServe: .placedServe
-        case .live: .live
-        case .paused: .paused
-        case .gameOver: .gameOver
-        case .training: .training
-        }
-    }
-}
-
-private extension GameModel.Server {
-    var snapshotServer: GameSnapshot.Server {
-        switch self {
-        case .player: .player
-        case .opponent: .opponent
-        }
-    }
 }

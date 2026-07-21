@@ -159,28 +159,6 @@ struct AudioShowdownTests {
         #expect(model.puck.vy == 0)
     }
 
-    @Test func snapshotCapturesCurrentGameState() {
-        let suiteName = "AudioShowdownTests.Snapshot.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let model = GameModel(settings: GameSettings(defaults: defaults), training: false, audio: GameAudioEngine())
-
-        model.touchBegan(at: CGPoint(x: 240, y: 900))
-
-        let snapshot = model.snapshot
-        #expect(snapshot.phase == .placedServe)
-        #expect(snapshot.server == .player)
-        #expect(snapshot.serveNumber == 1)
-        #expect(snapshot.playerScore == 0)
-        #expect(snapshot.opponentScore == 0)
-        #expect(snapshot.puck.x == 240)
-        #expect(snapshot.puck.y == 900)
-        #expect(snapshot.playerPaddle.x == 240)
-        #expect(snapshot.playerPaddle.y == 900)
-        #expect(snapshot.opponentPaddle.x == 300)
-        #expect(snapshot.opponentPaddle.y == 180)
-    }
-
     @Test func upperHalfDoubleTapPausesBeforeServeIsPlaced() {
         let suiteName = "AudioShowdownTests.ServePause.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
