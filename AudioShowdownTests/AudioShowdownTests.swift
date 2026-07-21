@@ -203,6 +203,21 @@ struct AudioShowdownTests {
         #expect(pauseEvents.contains { $0.kind == .pause })
     }
 
+    @Test func gameInputCanDrivePlacedServe() {
+        let suiteName = "AudioShowdownTests.Input.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = GameModel(settings: GameSettings(defaults: defaults), training: false, audio: GameAudioEngine())
+
+        model.handleInput(GameInput(phase: .began, x: 280, y: 880, wasTap: nil))
+        model.handleInput(GameInput(phase: .ended, x: 280, y: 880, wasTap: true))
+
+        #expect(model.phase == .placedServe)
+        #expect(model.snapshot.puck.x == 280)
+        #expect(model.snapshot.puck.y == 880)
+        #expect(model.drainEvents().contains { $0.kind == .serve && $0.side == .player })
+    }
+
     @Test func upperHalfDoubleTapPausesBeforeServeIsPlaced() {
         let suiteName = "AudioShowdownTests.ServePause.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
