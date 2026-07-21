@@ -21,15 +21,14 @@ struct GameSurfaceView: View {
                         if touchStart == nil {
                             touchStart = value.location
                             moved = false
-                            model.handleInput(GameInput(phase: .began, x: point.x, y: point.y, wasTap: nil))
+                            model.touchBegan(at: point)
                         } else {
                             if let touchStart, hypot(value.location.x - touchStart.x, value.location.y - touchStart.y) > 10 { moved = true }
-                            model.handleInput(GameInput(phase: .moved, x: point.x, y: point.y, wasTap: nil))
+                            model.touchMoved(to: point)
                         }
                     }
                     .onEnded { value in
-                        let point = tablePoint(value.location, in: geometry.size)
-                        model.handleInput(GameInput(phase: .ended, x: point.x, y: point.y, wasTap: !moved))
+                        model.touchEnded(wasTap: !moved, at: tablePoint(value.location, in: geometry.size))
                         touchStart = nil
                         moved = false
                     }

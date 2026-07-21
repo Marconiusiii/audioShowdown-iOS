@@ -128,18 +128,6 @@ final class GameModel: ObservableObject {
         return events
     }
 
-    func handleInput(_ input: GameInput) {
-        let point = CGPoint(x: input.x, y: input.y)
-        switch input.phase {
-        case .began:
-            handleTouchBegan(at: point)
-        case .moved:
-            handleTouchMoved(to: point)
-        case .ended:
-            handleTouchEnded(wasTap: input.wasTap ?? false, at: point)
-        }
-    }
-
     func tick(_ date: Date) {
         audio.setVolume(settings.volume)
         audio.setReverb(settings.reverbStyle)
@@ -180,18 +168,6 @@ final class GameModel: ObservableObject {
     }
 
     func touchBegan(at point: CGPoint) {
-        handleInput(GameInput(phase: .began, x: point.x, y: point.y, wasTap: nil))
-    }
-
-    func touchMoved(to point: CGPoint) {
-        handleInput(GameInput(phase: .moved, x: point.x, y: point.y, wasTap: nil))
-    }
-
-    func touchEnded(wasTap: Bool, at point: CGPoint) {
-        handleInput(GameInput(phase: .ended, x: point.x, y: point.y, wasTap: wasTap))
-    }
-
-    private func handleTouchBegan(at point: CGPoint) {
         if phase == .training {
             let clamped = CGPoint(
                 x: clamp(Double(point.x), puckRadius, Self.width - puckRadius),
@@ -231,7 +207,7 @@ final class GameModel: ObservableObject {
         }
     }
 
-    private func handleTouchMoved(to point: CGPoint) {
+    func touchMoved(to point: CGPoint) {
         if phase == .training {
             let previousY = puck.y
             let clamped = CGPoint(
@@ -259,7 +235,7 @@ final class GameModel: ObservableObject {
         movePlayer(to: point)
     }
 
-    private func handleTouchEnded(wasTap: Bool, at _: CGPoint) {
+    func touchEnded(wasTap: Bool, at _: CGPoint) {
         audio.stopMalletSlide()
         placingPuck = false
         guard wasTap else { return }
