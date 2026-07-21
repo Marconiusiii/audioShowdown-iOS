@@ -1,7 +1,7 @@
 import AVFoundation
 
 @MainActor
-final class GameAudioEngine: @unchecked Sendable {
+final class GameAudioEngine {
     private enum Waveform { case sine, triangle, square, sawtooth }
 
     private struct Tone {
@@ -97,9 +97,6 @@ final class GameAudioEngine: @unchecked Sendable {
     private var smoothPuckRattleEnergy = 0.0
     private var lastWinMotifIndex = -1
     private var lastLossMotifIndex = -1
-    private var notificationObservers: [NSObjectProtocol] = []
-    private var needsAudioSessionConfiguration = true
-    private var currentVolume = 0.8
 
     init() {
         engine.attach(dryEnvironment)
@@ -117,24 +114,13 @@ final class GameAudioEngine: @unchecked Sendable {
         configure(voice: smoothPuckVoice)
         puckVoices = makeTrackingVoices(count: 10)
         effectVoices = makeVoices(count: 16)
-        installAudioSessionObservers()
-    }
-
-    deinit {
-        for observer in notificationObservers {
-            NotificationCenter.default.removeObserver(observer)
-        }
     }
 
     func prepare(volume: Double) {
-        currentVolume = volume
         engine.mainMixerNode.outputVolume = Float(volume)
         do {
-            if needsAudioSessionConfiguration {
-                try configureAudioSession()
-                needsAudioSessionConfiguration = false
-            }
             if !started {
+                try configureAudioSession()
                 engine.prepare()
             }
             if !engine.isRunning { try engine.start() }
@@ -155,7 +141,6 @@ final class GameAudioEngine: @unchecked Sendable {
     }
 
     func setVolume(_ volume: Double) {
-        currentVolume = volume
         engine.mainMixerNode.outputVolume = Float(volume)
     }
 
@@ -758,13 +743,10 @@ final class GameAudioEngine: @unchecked Sendable {
     }
 
     private func ensureEngineRunning() -> Bool {
-        if engine.isRunning, !needsAudioSessionConfiguration { return true }
+        if engine.isRunning { return true }
         do {
-            if needsAudioSessionConfiguration {
-                try configureAudioSession()
-                needsAudioSessionConfiguration = false
-            }
             if !started {
+                try configureAudioSession()
                 engine.prepare()
             }
             try engine.start()
@@ -787,88 +769,6 @@ final class GameAudioEngine: @unchecked Sendable {
         // 12 ms keeps gameplay responsive while leaving enough audio scheduling room for assistive audio.
         try session.setPreferredIOBufferDuration(0.012)
         try session.setActive(true)
-    }
-
-    private func installAudioSessionObservers() {
-        let center = NotificationCenter.default
-        notificationObservers = [
-            center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] notification in
-                let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
-                Task { @MainActor [weak self] in
-                    self?.handleAudioSessionInterruption(rawType: rawType)
-                }
-            },
-            center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.resetAfterExternalAudioChange()
-                }
-            },
-            center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.resetAndPrepareAfterMediaServicesReset()
-                }
-            },
-            center.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.resetAfterExternalAudioChange()
-                }
-            }
-        ]
-    }
-
-    private func handleAudioSessionInterruption(rawType: UInt?) {
-        guard let rawType, let type = AVAudioSession.InterruptionType(rawValue: rawType) else {
-            resetAfterExternalAudioChange()
-            return
-        }
-
-        switch type {
-        case .began:
-            resetAfterExternalAudioChange()
-        case .ended:
-            needsAudioSessionConfiguration = true
-            prepare(volume: currentVolume)
-        @unknown default:
-            resetAfterExternalAudioChange()
-        }
-    }
-
-    private func resetAndPrepareAfterMediaServicesReset() {
-        resetAfterExternalAudioChange()
-        prepare(volume: currentVolume)
-    }
-
-    private func resetAfterExternalAudioChange() {
-        stopAllPlayerNodes()
-        engine.stop()
-        started = false
-        warmedUp = false
-        needsAudioSessionConfiguration = true
-        malletSlideStyle = -1
-        smoothPuckStyle = -1
-        smoothPuckGeneration += 1
-        smoothPuckDryQueuedBuffers = 0
-        smoothPuckWetQueuedBuffers = 0
-        smoothPuckRenderState = SmoothPuckRenderState()
-        smoothPuckWetRenderState = SmoothPuckRenderState()
-    }
-
-    private func stopAllPlayerNodes() {
-        stop(voice: malletSlideVoice)
-        stop(voice: smoothPuckVoice)
-        for voice in puckVoices {
-            stop(voice: voice)
-        }
-        for voice in effectVoices {
-            stop(voice: voice)
-        }
-    }
-
-    private func stop(voice: SpatialVoice) {
-        voice.dryPlayer.volume = 0
-        voice.wetPlayer.volume = 0
-        if voice.dryPlayer.isPlaying { voice.dryPlayer.stop() }
-        if voice.wetPlayer.isPlaying { voice.wetPlayer.stop() }
     }
 
     private func playPuck(_ buffer: AVAudioPCMBuffer, x: Double, proximity: Double) {

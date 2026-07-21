@@ -67,7 +67,6 @@ struct GameView: View {
             session.stopContinuousAudio()
         }
         .task {
-            audioEngine.warmUp(volume: settings.volume, reverbStyle: settings.reverbStyle, puckVolume: settings.puckVolume)
             try? await Task.sleep(for: .milliseconds(450))
             session.announceInitialState()
         }
