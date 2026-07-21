@@ -25,7 +25,6 @@ final class GameModel: ObservableObject {
     @Published var phase: Phase
     @Published var server: Server = .player
     @Published var serveNumber = 1
-    private(set) var events: [GameEvent] = []
 
     private var previousTime: TimeInterval?
     private var previousPlayerPosition = Disc(x: 300, y: 1020)
@@ -123,11 +122,6 @@ final class GameModel: ObservableObject {
         }
     }
 
-    func drainEvents() -> [GameEvent] {
-        defer { events.removeAll() }
-        return events
-    }
-
     func tick(_ date: Date) {
         audio.setVolume(settings.volume)
         audio.setReverb(settings.reverbStyle)
@@ -195,7 +189,6 @@ final class GameModel: ObservableObject {
                 placingPuck = true
                 resetPuckRecoveryState()
                 phase = .placedServe
-                emit(.init(kind: .serve, side: .player, x: puck.x, y: puck.y, speed: nil, playerScore: playerScore, opponentScore: opponentScore, message: serveAnnouncement))
                 haptics.play(.serve, level: settings.haptics)
             } else {
                 opponentServe()
@@ -267,11 +260,9 @@ final class GameModel: ObservableObject {
         if phase == .paused {
             phase = phaseBeforePause ?? .live
             phaseBeforePause = nil
-            emit(.init(kind: .resume, side: nil, x: nil, y: nil, speed: nil, playerScore: playerScore, opponentScore: opponentScore, message: "Game resumed."))
         } else {
             phaseBeforePause = phase
             phase = .paused
-            emit(.init(kind: .pause, side: nil, x: nil, y: nil, speed: nil, playerScore: playerScore, opponentScore: opponentScore, message: "Game paused. Settings are available."))
         }
         previousTime = nil
         announce(phase == .paused ? "Game paused. Settings are available." : "Game resumed.")
@@ -355,7 +346,6 @@ final class GameModel: ObservableObject {
             guard now - lastRicochetTime >= 0.055 else { return }
             lastRicochetTime = now
             let impactSpeed = hypot(puck.vx, puck.vy)
-            emit(.init(kind: .wallBounce, side: nil, x: puck.x, y: puck.y, speed: impactSpeed, playerScore: nil, opponentScore: nil, message: nil))
             audio.energizeSmoothPuck(amount: impactSpeed / 2_800)
             audio.ricochet(x: puck.x / Self.width, speed: impactSpeed)
             haptics.play(.wall, level: settings.haptics, strength: impactSpeed / 1_400)
@@ -457,7 +447,6 @@ final class GameModel: ObservableObject {
             guard now - lastOpponentStrikeTime >= 0.075 else { return }
             lastOpponentStrikeTime = now
         }
-        emit(.init(kind: byPlayer ? .playerStrike : .opponentStrike, side: byPlayer ? .player : .opponent, x: puck.x, y: puck.y, speed: speed, playerScore: nil, opponentScore: nil, message: nil))
         audio.strike(style: settings.strikeSound, x: puck.x / Self.width, byPlayer: byPlayer)
         audio.energizeSmoothPuck(amount: speed / 2_400)
         haptics.play(
@@ -564,7 +553,6 @@ final class GameModel: ObservableObject {
         let side = puck.y < Self.center ? -1 : 1
         guard lastCenterSide != 0, side != lastCenterSide else { lastCenterSide = side; return }
         lastCenterSide = side
-        emit(.init(kind: .centerCrossing, side: side < 0 ? .opponent : .player, x: puck.x, y: puck.y, speed: hypot(puck.vx, puck.vy), playerScore: nil, opponentScore: nil, message: nil))
         if settings.centerCrossingSound { audio.centerCrossing(volume: settings.centerCrossingVolume) }
         if !settings.airHockeyMode, hypot(puck.vx, puck.vy) > 1_900, Double.random(in: 0...1) < 0.08 {
             boardBall(againstPlayer: side < 0)
@@ -587,12 +575,10 @@ final class GameModel: ObservableObject {
         let points = Self.pointsPerGoal(airHockeyMode: settings.airHockeyMode)
         if player { playerScore += points } else { opponentScore += points }
         advanceServe(pointToPlayer: player)
-        emit(.init(kind: .goal, side: player ? .player : .opponent, x: puck.x, y: puck.y, speed: hypot(puck.vx, puck.vy), playerScore: playerScore, opponentScore: opponentScore, message: nil))
         if hasWinner {
             phase = .gameOver
             audio.stopSmoothPuck()
             let playerWon = playerScore > opponentScore
-            emit(.init(kind: .gameOver, side: playerWon ? .player : .opponent, x: nil, y: nil, speed: nil, playerScore: playerScore, opponentScore: opponentScore, message: "\(playerWon ? "You win!" : "Computer wins.") Final score, \(scoreText)."))
             if playerWon { audio.matchWon() }
             else { audio.matchLost() }
             haptics.play(.gameOver, level: settings.haptics)
@@ -607,14 +593,12 @@ final class GameModel: ObservableObject {
             phase = .waitingForServe; puck = Disc(x: 300, y: 600)
             resetPuckRecoveryState()
             lockServeInput(for: 1.1)
-            emit(.init(kind: .serve, side: server.eventSide, x: puck.x, y: puck.y, speed: nil, playerScore: playerScore, opponentScore: opponentScore, message: serveAnnouncement))
             announce(serveAnnouncement)
         }
     }
 
     private func boardBall(againstPlayer: Bool) {
         if againstPlayer { opponentScore += 1 } else { playerScore += 1 }
-        emit(.init(kind: .boardBall, side: againstPlayer ? .opponent : .player, x: puck.x, y: puck.y, speed: hypot(puck.vx, puck.vy), playerScore: playerScore, opponentScore: opponentScore, message: nil))
         audio.boardBall(); haptics.play(.boardBall, level: settings.haptics)
         audio.stopSmoothPuck()
         advanceShowdownServe()
@@ -624,7 +608,6 @@ final class GameModel: ObservableObject {
             phase = .gameOver
             haptics.play(.gameOver, level: settings.haptics)
             let playerWon = playerScore > opponentScore
-            emit(.init(kind: .gameOver, side: playerWon ? .player : .opponent, x: nil, y: nil, speed: nil, playerScore: playerScore, opponentScore: opponentScore, message: "Board Ball. \(againstPlayer ? "Computer" : "You") wins. Final score, \(scoreText)."))
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { [weak self] in
                 guard let self, self.phase == .gameOver else { return }
                 if playerWon { self.audio.matchWon() }
@@ -637,7 +620,6 @@ final class GameModel: ObservableObject {
         } else {
             phase = .waitingForServe
             lockServeInput(for: 1.1)
-            emit(.init(kind: .serve, side: server.eventSide, x: puck.x, y: puck.y, speed: nil, playerScore: playerScore, opponentScore: opponentScore, message: serveAnnouncement))
             announce("Board Ball. \(againstPlayer ? "Computer" : "You") scores one point. \(serveAnnouncement)")
         }
     }
@@ -661,9 +643,7 @@ final class GameModel: ObservableObject {
         lastHitByPlayer = false
         progressY = puck.y
         progressTime = Date.timeIntervalSinceReferenceDate
-        phase = .live
-        emit(.init(kind: .serve, side: .opponent, x: puck.x, y: puck.y, speed: hypot(puck.vx, puck.vy), playerScore: playerScore, opponentScore: opponentScore, message: serveAnnouncement))
-        haptics.play(.serve, level: settings.haptics)
+        phase = .live; haptics.play(.serve, level: settings.haptics)
     }
 
     private func resetPuckRecoveryState() {
@@ -736,10 +716,6 @@ final class GameModel: ObservableObject {
         Self.isWinningScore(player: playerScore, opponent: opponentScore, airHockeyMode: settings.airHockeyMode)
     }
 
-    private func emit(_ event: GameEvent) {
-        events.append(event)
-    }
-
     private var serveAnnouncement: String {
         let currentServeNumber: Int
         if settings.airHockeyMode {
@@ -785,13 +761,6 @@ private extension GameModel.Phase {
 
 private extension GameModel.Server {
     var snapshotServer: GameSnapshot.Server {
-        switch self {
-        case .player: .player
-        case .opponent: .opponent
-        }
-    }
-
-    var eventSide: GameEvent.Side {
         switch self {
         case .player: .player
         case .opponent: .opponent
