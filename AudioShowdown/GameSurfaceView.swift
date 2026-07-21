@@ -1,12 +1,11 @@
 import SwiftUI
 
 struct GameSurfaceView: View {
-    @ObservedObject var session: GameSession
+    @ObservedObject var model: GameModel
     let theme: GameTheme
     let bottomGestureClearance: CGFloat
     @State private var touchStart: CGPoint?
     @State private var moved = false
-    private var model: GameModel { session.model }
 
     var body: some View {
         GeometryReader { geometry in
@@ -22,15 +21,15 @@ struct GameSurfaceView: View {
                         if touchStart == nil {
                             touchStart = value.location
                             moved = false
-                            session.handleLocalInput(GameInput(phase: .began, x: point.x, y: point.y, wasTap: nil))
+                            model.handleInput(GameInput(phase: .began, x: point.x, y: point.y, wasTap: nil))
                         } else {
                             if let touchStart, hypot(value.location.x - touchStart.x, value.location.y - touchStart.y) > 10 { moved = true }
-                            session.handleLocalInput(GameInput(phase: .moved, x: point.x, y: point.y, wasTap: nil))
+                            model.handleInput(GameInput(phase: .moved, x: point.x, y: point.y, wasTap: nil))
                         }
                     }
                     .onEnded { value in
                         let point = tablePoint(value.location, in: geometry.size)
-                        session.handleLocalInput(GameInput(phase: .ended, x: point.x, y: point.y, wasTap: !moved))
+                        model.handleInput(GameInput(phase: .ended, x: point.x, y: point.y, wasTap: !moved))
                         touchStart = nil
                         moved = false
                     }
@@ -39,7 +38,7 @@ struct GameSurfaceView: View {
             .accessibilityLabel(model.isGameOver ? "Game over table. Double-tap to play again. Triple-tap to return home." : "Audio Showdown table")
             .accessibilityHint(model.isGameOver ? "Direct Touch area with replay and Home gestures." : "Direct Touch area. Touch and drag to play. Double-tap to pause the game.")
             .accessibilityDirectTouch(options: .silentOnTouch)
-                .onChange(of: timeline.date) { _, date in session.tick(date) }
+                .onChange(of: timeline.date) { _, date in model.tick(date) }
             }
         }
         .background(theme.table)

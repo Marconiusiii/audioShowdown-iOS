@@ -5,7 +5,7 @@ struct GameView: View {
     let audioEngine: GameAudioEngine
     let training: Bool
     let returnHome: () -> Void
-    @StateObject private var session: GameSession
+    @StateObject private var model: GameModel
     @State private var showingSettings = false
     @AccessibilityFocusState private var pauseHeadingFocused: Bool
 
@@ -14,7 +14,7 @@ struct GameView: View {
         self.audioEngine = audioEngine
         self.training = training
         self.returnHome = returnHome
-        _session = StateObject(wrappedValue: GameSession(settings: settings, training: training, audio: audioEngine))
+        _model = StateObject(wrappedValue: GameModel(settings: settings, training: training, audio: audioEngine))
     }
 
     var body: some View {
@@ -32,43 +32,43 @@ struct GameView: View {
                 .accessibilityAddTraits(.isHeader)
 
             if !training {
-                Text("\(session.model.playerScore)–\(session.model.opponentScore)")
+                Text("\(model.playerScore)–\(model.opponentScore)")
                     .font(.headline.monospacedDigit())
                     .foregroundStyle(theme.foreground)
                     .frame(maxWidth: .infinity, minHeight: 56)
                     .background(theme.background)
                     .contentShape(Rectangle())
-                    .accessibilityLabel("Score, \(session.scoreText)")
+                    .accessibilityLabel("Score, \(model.scoreText)")
             }
 
             GeometryReader { proxy in
                 let bottomGestureClearance = max(proxy.safeAreaInsets.bottom + 18, 46)
-                GameSurfaceView(session: session, theme: theme, bottomGestureClearance: bottomGestureClearance)
+                GameSurfaceView(model: model, theme: theme, bottomGestureClearance: bottomGestureClearance)
                     .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottom)
             }
         }
         .background(theme.background.ignoresSafeArea())
         .tint(theme.accent)
         .sheet(isPresented: $showingSettings) { SettingsView(settings: settings, audioEngine: audioEngine) }
-        .fullScreenCover(isPresented: Binding(get: { session.isPaused }, set: { isPresented in
-            if !isPresented, session.isPaused { session.togglePause() }
+        .fullScreenCover(isPresented: Binding(get: { model.isPaused }, set: { isPresented in
+            if !isPresented, model.isPaused { model.togglePause() }
         })) {
             pauseModal(theme: theme)
         }
         .onReceive(NotificationCenter.default.publisher(for: .trainingFinished)) { _ in
-            session.stopContinuousAudio()
+            model.stopContinuousAudio()
             returnHome()
         }
         .onReceive(NotificationCenter.default.publisher(for: .gameOverReturnHome)) { _ in
-            session.stopContinuousAudio()
+            model.stopContinuousAudio()
             returnHome()
         }
         .onDisappear {
-            session.stopContinuousAudio()
+            model.stopContinuousAudio()
         }
         .task {
             try? await Task.sleep(for: .milliseconds(450))
-            session.announceInitialState()
+            model.announceInitialState()
         }
     }
 
@@ -86,13 +86,13 @@ struct GameView: View {
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityFocused($pauseHeadingFocused)
 
-            AppTextRow(text: "\(session.scoreText).", theme: theme, alignment: .center)
+            AppTextRow(text: "\(model.scoreText).", theme: theme, alignment: .center)
 
             AppButtonRow(title: "End Game", theme: theme) {
                 returnHome()
             }
             AppButtonRow(title: "Resume Game", theme: theme, prominent: true) {
-                session.togglePause()
+                model.togglePause()
             }
             AppButtonRow(title: "Settings", theme: theme) {
                 showingSettings = true
