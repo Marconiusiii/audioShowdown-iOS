@@ -5,14 +5,18 @@ import Combine
 @MainActor
 final class GameModel: ObservableObject {
     enum Phase { case waitingForServe, placedServe, live, paused, gameOver, training }
-    typealias Server = GameRules.Server
+    enum Server { case player, opponent }
     struct Disc { var x: Double; var y: Double; var vx: Double = 0; var vy: Double = 0 }
 
-    static let width = GameRules.width
-    static let height = GameRules.height
-    static let center = GameRules.center
-    static let goalHalfWidth = GameRules.goalHalfWidth
-    static let puckSpeedCap = GameRules.puckSpeedCap
+    static let width = 600.0
+    static let height = 1200.0
+    static let center = 600.0
+    static let goalHalfWidth = 150.0
+    static let puckSpeedCap = 2_150.0
+    private static let friction = 0.06
+    private static let wallRestitution = 0.97
+    private static let deadVerticalSpeed = 105.0
+    private static let deadSpeed = 190.0
     let settings: GameSettings
     let audio: GameAudioEngine
     let haptics = GameHapticsEngine()
@@ -56,43 +60,73 @@ final class GameModel: ObservableObject {
     var puckRadius: Double { [26, 34, 42][settings.puckSize] }
 
     static func pointsPerGoal(airHockeyMode: Bool) -> Int {
-        GameRules.pointsPerGoal(airHockeyMode: airHockeyMode)
+        airHockeyMode ? 1 : 2
     }
 
     static func isWinningScore(player: Int, opponent: Int, airHockeyMode: Bool) -> Bool {
-        GameRules.isWinningScore(player: player, opponent: opponent, airHockeyMode: airHockeyMode)
+        if airHockeyMode { return max(player, opponent) >= 7 }
+        return max(player, opponent) >= 11 && abs(player - opponent) >= 2
     }
 
     static func nextShowdownServe(server: Server, serveNumber: Int) -> (Server, Int) {
-        GameRules.nextShowdownServe(server: server, serveNumber: serveNumber)
+        serveNumber >= 5 ? (server == .player ? .opponent : .player, 1) : (server, serveNumber + 1)
     }
 
     static func playerProximity(forY y: Double) -> Double {
-        GameRules.playerProximity(forY: y)
+        min(max(y / height, 0), 1)
     }
 
     static func puckPulseInterval(speed: Int, speedsUpWhenApproaching: Bool, proximity: Double) -> TimeInterval {
-        GameRules.puckPulseInterval(speed: speed, speedsUpWhenApproaching: speedsUpWhenApproaching, proximity: proximity)
+        let clampedProximity = min(max(proximity, 0), 1)
+        let speed = min(max(speed, 0), 2)
+        let nearIntervals = [0.30, 0.16, 0.092]
+        let selectedInterval = nearIntervals[speed]
+        guard speedsUpWhenApproaching else { return selectedInterval }
+        let farAdditions = [0.22, 0.22, 0.192]
+        return selectedInterval + farAdditions[speed] * pow(1 - clampedProximity, 0.8)
     }
 
     static func shapedStrikeVelocity(vx: Double, vy: Double, byPlayer: Bool) -> (vx: Double, vy: Double) {
-        GameRules.shapedStrikeVelocity(vx: vx, vy: vy, byPlayer: byPlayer)
+        let direction = byPlayer ? -1.0 : 1.0
+        let speed = max(360, hypot(vx, vy))
+        let minimumVerticalSpeed = min(speed * 0.65, max(180, speed * 0.25))
+        guard vy * direction < minimumVerticalSpeed else { return (vx, vy) }
+        let shapedVy = direction * minimumVerticalSpeed
+        let maximumVx = sqrt(max(0, speed * speed - minimumVerticalSpeed * minimumVerticalSpeed))
+        return (min(max(vx, -maximumVx), maximumVx), shapedVy)
     }
 
     static func recoveredPuckVelocity(vx: Double, vy: Double, byPlayer: Bool) -> (vx: Double, vy: Double) {
-        GameRules.recoveredPuckVelocity(vx: vx, vy: vy, byPlayer: byPlayer)
+        let direction = byPlayer ? -1.0 : 1.0
+        let speed = hypot(vx, vy)
+        let targetSpeed = max(420, speed)
+        let targetVy = max(240, targetSpeed * 0.35)
+        let maximumVx = sqrt(max(0, targetSpeed * targetSpeed - targetVy * targetVy))
+        return (min(max(vx, -maximumVx), maximumVx), direction * targetVy)
     }
 
     static func cappedVelocity(vx: Double, vy: Double) -> (vx: Double, vy: Double) {
-        GameRules.cappedVelocity(vx: vx, vy: vy)
+        let speed = hypot(vx, vy)
+        guard speed > puckSpeedCap else { return (vx, vy) }
+        let scale = puckSpeedCap / speed
+        return (vx * scale, vy * scale)
     }
 
     static func gameTimeScale(speed: Double) -> Double {
-        GameRules.gameTimeScale(speed: speed)
+        0.45 * pow(2.6 / 0.45, (speed - 1) / 9)
     }
 
     static func serveAnnouncement(server: Server, serveNumber: Int, playerScore: Int, computerScore: Int) -> String {
-        GameRules.serveAnnouncement(server: server, serveNumber: serveNumber, playerScore: playerScore, computerScore: computerScore)
+        let ordinal = ordinalWord(serveNumber)
+        if server == .player {
+            return "Your \(ordinal) serve, \(playerScore) serving \(computerScore)"
+        }
+        return "Computer's \(ordinal) serve, \(computerScore) serving \(playerScore)"
+    }
+
+    private static func ordinalWord(_ number: Int) -> String {
+        let words = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"]
+        return words.indices.contains(number - 1) ? words[number - 1] : "\(number)th"
     }
 
     init(settings: GameSettings, training: Bool, audio: GameAudioEngine) {
@@ -131,8 +165,8 @@ final class GameModel: ObservableObject {
         for _ in 0..<substeps {
             puck.x += puck.vx * scaledStep
             puck.y += puck.vy * scaledStep
-            puck.vx *= exp(-GameRules.friction * realStep)
-            puck.vy *= exp(-GameRules.friction * realStep)
+            puck.vx *= exp(-Self.friction * realStep)
+            puck.vy *= exp(-Self.friction * realStep)
             capPuckSpeed()
             collideWithWalls()
             collide(mallet: playerMallet, isPlayer: true)
@@ -322,10 +356,10 @@ final class GameModel: ObservableObject {
     private func collideWithWalls() {
         var hitWall = false
         var hitSideWall = false
-        if puck.x < puckRadius { puck.x = puckRadius; puck.vx = abs(puck.vx) * GameRules.wallRestitution; hitWall = true; hitSideWall = true }
-        if puck.x > Self.width - puckRadius { puck.x = Self.width - puckRadius; puck.vx = -abs(puck.vx) * GameRules.wallRestitution; hitWall = true; hitSideWall = true }
-        if puck.y < puckRadius, abs(puck.x - 300) >= Self.goalHalfWidth { puck.y = puckRadius; puck.vy = abs(puck.vy) * GameRules.wallRestitution; hitWall = true }
-        if puck.y > Self.height - puckRadius, abs(puck.x - 300) >= Self.goalHalfWidth { puck.y = Self.height - puckRadius; puck.vy = -abs(puck.vy) * GameRules.wallRestitution; hitWall = true }
+        if puck.x < puckRadius { puck.x = puckRadius; puck.vx = abs(puck.vx) * Self.wallRestitution; hitWall = true; hitSideWall = true }
+        if puck.x > Self.width - puckRadius { puck.x = Self.width - puckRadius; puck.vx = -abs(puck.vx) * Self.wallRestitution; hitWall = true; hitSideWall = true }
+        if puck.y < puckRadius, abs(puck.x - 300) >= Self.goalHalfWidth { puck.y = puckRadius; puck.vy = abs(puck.vy) * Self.wallRestitution; hitWall = true }
+        if puck.y > Self.height - puckRadius, abs(puck.x - 300) >= Self.goalHalfWidth { puck.y = Self.height - puckRadius; puck.vy = -abs(puck.vy) * Self.wallRestitution; hitWall = true }
         if hitWall {
             let now = Date.timeIntervalSinceReferenceDate
             if hitSideWall {
@@ -523,8 +557,8 @@ final class GameModel: ObservableObject {
             return
         }
         let creeping = speed < 260 && abs(puck.vy) < 155
-        let stalled = speed < GameRules.deadSpeed
-        let tooLateral = abs(puck.vy) < GameRules.deadVerticalSpeed
+        let stalled = speed < Self.deadSpeed
+        let tooLateral = abs(puck.vy) < Self.deadVerticalSpeed
         guard stalled || tooLateral || creeping else { return }
         let delay = creeping ? 0.85 : (stalled ? 0.95 : 1.35)
         guard now - progressTime >= delay else { return }
