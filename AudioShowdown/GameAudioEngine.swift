@@ -104,6 +104,9 @@ final class GameAudioEngine: @unchecked Sendable {
     private var lastLossMotifIndex = -1
     private var outputProfile: OutputProfile?
     private var routeChangeObserver: NSObjectProtocol?
+    private var interruptionObserver: NSObjectProtocol?
+    private var mediaServicesResetObserver: NSObjectProtocol?
+    private var isInterrupted = false
 
     init() {
         engine.attach(dryEnvironment)
@@ -129,15 +132,41 @@ final class GameAudioEngine: @unchecked Sendable {
                 self?.refreshOutputProfile(force: true)
             }
         }
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            Task { @MainActor [weak self] in
+                self?.handleAudioSessionInterruption(rawType: rawType)
+            }
+        }
+        mediaServicesResetObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleMediaServicesReset()
+            }
+        }
     }
 
     deinit {
         if let routeChangeObserver {
             NotificationCenter.default.removeObserver(routeChangeObserver)
         }
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+        }
+        if let mediaServicesResetObserver {
+            NotificationCenter.default.removeObserver(mediaServicesResetObserver)
+        }
     }
 
     func prepare(volume: Double) {
+        guard !isInterrupted else { return }
         engine.mainMixerNode.outputVolume = Float(volume)
         do {
             if !started {
@@ -765,6 +794,7 @@ final class GameAudioEngine: @unchecked Sendable {
     }
 
     private func ensureEngineRunning() -> Bool {
+        guard !isInterrupted else { return false }
         refreshOutputProfile()
         if engine.isRunning { return true }
         do {
@@ -793,6 +823,54 @@ final class GameAudioEngine: @unchecked Sendable {
         // 12 ms keeps gameplay responsive while leaving enough audio scheduling room for assistive audio.
         try session.setPreferredIOBufferDuration(0.012)
         try session.setActive(true)
+    }
+
+    private func handleAudioSessionInterruption(rawType: UInt?) {
+        guard let rawType, let type = AVAudioSession.InterruptionType(rawValue: rawType) else {
+            beginAudioInterruption()
+            return
+        }
+        switch type {
+        case .began:
+            beginAudioInterruption()
+        case .ended:
+            endAudioInterruption()
+        @unknown default:
+            beginAudioInterruption()
+        }
+    }
+
+    private func beginAudioInterruption() {
+        isInterrupted = true
+        stopContinuousAudioForInterruption()
+        engine.pause()
+        started = false
+    }
+
+    private func endAudioInterruption() {
+        isInterrupted = false
+        outputProfile = nil
+        do {
+            try configureAudioSession()
+            refreshOutputProfile(force: true)
+        } catch {
+            started = false
+        }
+    }
+
+    private func handleMediaServicesReset() {
+        isInterrupted = false
+        stopContinuousAudioForInterruption()
+        engine.stop()
+        started = false
+        warmedUp = false
+        outputProfile = nil
+    }
+
+    private func stopContinuousAudioForInterruption() {
+        stopSmoothPuck()
+        stopMalletSlide()
+        stopPuckPreviewVoices()
     }
 
     private func playPuck(_ buffer: AVAudioPCMBuffer, x: Double, proximity: Double) {

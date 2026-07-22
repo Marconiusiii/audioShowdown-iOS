@@ -7,6 +7,7 @@ struct GameView: View {
     let returnHome: () -> Void
     @StateObject private var model: GameModel
     @State private var showingSettings = false
+    @Environment(\.scenePhase) private var scenePhase
     @AccessibilityFocusState private var pauseHeadingFocused: Bool
 
     init(settings: GameSettings, audioEngine: GameAudioEngine, training: Bool, returnHome: @escaping () -> Void) {
@@ -66,6 +67,9 @@ struct GameView: View {
         .onDisappear {
             model.stopContinuousAudio()
         }
+        .onChange(of: scenePhase) { _, phase in
+            handleScenePhaseChange(phase)
+        }
         .task {
             try? await Task.sleep(for: .milliseconds(450))
             model.announceInitialState()
@@ -105,6 +109,15 @@ struct GameView: View {
         .task {
             try? await Task.sleep(for: .milliseconds(250))
             pauseHeadingFocused = true
+        }
+    }
+
+    private func handleScenePhaseChange(_ phase: ScenePhase) {
+        guard phase != .active else { return }
+        model.stopContinuousAudio()
+        guard !training else { return }
+        if model.phase == .waitingForServe || model.phase == .placedServe || model.phase == .live {
+            model.togglePause()
         }
     }
 
