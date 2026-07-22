@@ -845,7 +845,7 @@ final class GameAudioEngine: @unchecked Sendable {
 
     private func currentOutputProfile() -> OutputProfile {
         let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
-        guard !outputs.isEmpty else { return .builtInSpeaker }
+        guard !outputs.isEmpty else { return .personalAudio }
         let personalAudioPorts: Set<AVAudioSession.Port> = [
             .headphones,
             .bluetoothA2DP,
@@ -853,7 +853,17 @@ final class GameAudioEngine: @unchecked Sendable {
             .bluetoothLE,
             .airPlay
         ]
-        return outputs.contains { personalAudioPorts.contains($0.portType) } ? .personalAudio : .builtInSpeaker
+        let speakerPorts: Set<AVAudioSession.Port> = [
+            .builtInSpeaker,
+            .builtInReceiver
+        ]
+        if outputs.contains(where: { personalAudioPorts.contains($0.portType) }) {
+            return .personalAudio
+        }
+        if outputs.contains(where: { speakerPorts.contains($0.portType) }) {
+            return .builtInSpeaker
+        }
+        return .personalAudio
     }
 
     private func audioSessionMode(for profile: OutputProfile) -> AVAudioSession.Mode {
