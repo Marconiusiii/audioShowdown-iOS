@@ -1,7 +1,7 @@
 import AVFoundation
 
 @MainActor
-final class GameAudioEngine {
+final class GameAudioEngine: @unchecked Sendable {
     private enum Waveform { case sine, triangle, square, sawtooth }
 
     private struct Tone {
@@ -69,6 +69,11 @@ final class GameAudioEngine {
         var transientPrevious4 = 0.0
     }
 
+    private enum OutputProfile {
+        case personalAudio
+        case builtInSpeaker
+    }
+
     private let engine = AVAudioEngine()
     private let dryEnvironment = AVAudioEnvironmentNode()
     private let wetEnvironment = AVAudioEnvironmentNode()
@@ -97,6 +102,8 @@ final class GameAudioEngine {
     private var smoothPuckRattleEnergy = 0.0
     private var lastWinMotifIndex = -1
     private var lastLossMotifIndex = -1
+    private var outputProfile: OutputProfile?
+    private var routeChangeObserver: NSObjectProtocol?
 
     init() {
         engine.attach(dryEnvironment)
@@ -105,8 +112,6 @@ final class GameAudioEngine {
         engine.connect(dryEnvironment, to: engine.mainMixerNode, format: nil)
         engine.connect(wetEnvironment, to: wetMixer, format: nil)
         engine.connect(wetMixer, to: engine.mainMixerNode, format: nil)
-        configureSpatialEnvironment(dryEnvironment)
-        configureSpatialEnvironment(wetEnvironment)
         dryEnvironment.reverbParameters.enable = false
         wetEnvironment.reverbParameters.enable = true
         wetMixer.outputVolume = 0
@@ -114,6 +119,22 @@ final class GameAudioEngine {
         configure(voice: smoothPuckVoice)
         puckVoices = makeTrackingVoices(count: 10)
         effectVoices = makeVoices(count: 16)
+        refreshOutputProfile(force: true)
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshOutputProfile(force: true)
+            }
+        }
+    }
+
+    deinit {
+        if let routeChangeObserver {
+            NotificationCenter.default.removeObserver(routeChangeObserver)
+        }
     }
 
     func prepare(volume: Double) {
@@ -121,6 +142,7 @@ final class GameAudioEngine {
         do {
             if !started {
                 try configureAudioSession()
+                refreshOutputProfile(force: true)
                 engine.prepare()
             }
             if !engine.isRunning { try engine.start() }
@@ -743,10 +765,12 @@ final class GameAudioEngine {
     }
 
     private func ensureEngineRunning() -> Bool {
+        refreshOutputProfile()
         if engine.isRunning { return true }
         do {
             if !started {
                 try configureAudioSession()
+                refreshOutputProfile(force: true)
                 engine.prepare()
             }
             try engine.start()
@@ -760,7 +784,7 @@ final class GameAudioEngine {
 
     private func configureAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .measurement, options: [.mixWithOthers])
+        try session.setCategory(.playback, mode: audioSessionMode(for: currentOutputProfile()), options: [.mixWithOthers])
         try session.setPreferredSampleRate(sourceFormat.sampleRate)
         if session.maximumOutputNumberOfChannels >= 2 {
             try session.setPreferredOutputNumberOfChannels(2)
@@ -803,8 +827,41 @@ final class GameAudioEngine {
         }
     }
 
-    private func configureSpatialEnvironment(_ environment: AVAudioEnvironmentNode) {
-        environment.outputType = .headphones
+    private func refreshOutputProfile(force: Bool = false) {
+        let profile = currentOutputProfile()
+        guard force || profile != outputProfile else { return }
+        outputProfile = profile
+        configureSpatialEnvironment(dryEnvironment, for: profile)
+        configureSpatialEnvironment(wetEnvironment, for: profile)
+        configureRendering(for: malletSlideVoice, profile: profile)
+        configureRendering(for: smoothPuckVoice, profile: profile)
+        for voice in puckVoices {
+            configureRendering(for: voice, profile: profile)
+        }
+        for voice in effectVoices {
+            configureRendering(for: voice, profile: profile)
+        }
+    }
+
+    private func currentOutputProfile() -> OutputProfile {
+        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+        guard !outputs.isEmpty else { return .builtInSpeaker }
+        let personalAudioPorts: Set<AVAudioSession.Port> = [
+            .headphones,
+            .bluetoothA2DP,
+            .bluetoothHFP,
+            .bluetoothLE,
+            .airPlay
+        ]
+        return outputs.contains { personalAudioPorts.contains($0.portType) } ? .personalAudio : .builtInSpeaker
+    }
+
+    private func audioSessionMode(for profile: OutputProfile) -> AVAudioSession.Mode {
+        profile == .personalAudio ? .measurement : .default
+    }
+
+    private func configureSpatialEnvironment(_ environment: AVAudioEnvironmentNode, for profile: OutputProfile) {
+        environment.outputType = profile == .personalAudio ? .headphones : .builtInSpeakers
         environment.listenerPosition = AVAudio3DPoint(x: 0, y: 0, z: 0)
         environment.listenerAngularOrientation = AVAudio3DAngularOrientation(yaw: 0, pitch: 0, roll: 0)
         environment.distanceAttenuationParameters.distanceAttenuationModel = .linear
@@ -813,8 +870,19 @@ final class GameAudioEngine {
         environment.distanceAttenuationParameters.rolloffFactor = 0
     }
 
+    private func configureRendering(for voice: SpatialVoice, profile: OutputProfile) {
+        let algorithm: AVAudio3DMixingRenderingAlgorithm = profile == .personalAudio ? .HRTFHQ : .equalPowerPanning
+        voice.dryPlayer.sourceMode = .spatializeIfMono
+        voice.dryPlayer.renderingAlgorithm = algorithm
+        voice.wetPlayer.sourceMode = .spatializeIfMono
+        voice.wetPlayer.renderingAlgorithm = algorithm
+    }
+
     private func spatialPosition(x: Double, proximity: Double) -> AVAudio3DPoint {
         let normalized = clamp(x) * 2 - 1
+        if outputProfile == .builtInSpeaker {
+            return AVAudio3DPoint(x: Float(normalized), y: 0, z: -1)
+        }
         let near = clamp(proximity)
         let nearWeight = near * near
         let horizontalSpread = 6.2 - 1.6 * nearWeight
