@@ -1,8 +1,17 @@
-	AGENTS.md
+AGENTS.md
 memory/
 appStore/
 graphics/
+marketing/
 sourceWordList/
+
+## Assistant / agent working files
+.claude/
+CLAUDE.local.md
+scratchpad/
+.scratchpad/
+*.scratch
+*.scratch.*
 # Xcode
 #
 # gitignore contributors: remember to update Global/Xcode.gitignore, Objective-C.gitignore & Swift.gitignore
