@@ -134,17 +134,42 @@ final class GameModel: ObservableObject {
         self.training = training
         self.audio = audio
         phase = training ? .training : .waitingForServe
+        if !training, let scene = ScreenshotStaging.requested {
+            apply(scene)
+        }
     }
+
+    /// Adopts a staged screenshot scene wholesale. See ScreenshotStaging.
+    private func apply(_ scene: ScreenshotStaging.Scene) {
+        playerScore = scene.playerScore
+        opponentScore = scene.opponentScore
+        puck = Disc(x: scene.puck.x, y: scene.puck.y,
+                    vx: scene.puckVelocity.vx, vy: scene.puckVelocity.vy)
+        playerMallet = Disc(x: scene.playerMallet.x, y: scene.playerMallet.y)
+        opponentMallet = Disc(x: scene.opponentMallet.x, y: scene.opponentMallet.y)
+        previousPlayerPosition = playerMallet
+        progressY = puck.y
+        lastCenterSide = puck.y < Self.center ? -1 : 1
+        stagingFrozen = scene.frozen
+        phase = .live
+    }
+
+    /// When set, `tick` returns immediately so a staged frame holds still
+    /// while the screenshot is taken.
+    private var stagingFrozen = false
 
     func announceInitialState() {
         if training {
             announce("Training mode. Drag the puck around the table and follow the sound. Double-tap the table to return home.")
-        } else {
+        } else if !stagingFrozen {
             announce(serveAnnouncement)
         }
     }
 
     func tick(_ date: Date) {
+        // A staged screenshot scene holds its exact frame; advancing physics
+        // would scatter the composition before the capture is taken.
+        if stagingFrozen { return }
         audio.setVolume(settings.volume)
         audio.setReverb(settings.reverbStyle)
         audio.setPuckVolume(settings.puckVolume)

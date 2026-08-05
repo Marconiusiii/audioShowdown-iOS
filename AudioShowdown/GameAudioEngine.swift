@@ -69,7 +69,7 @@ final class GameAudioEngine: @unchecked Sendable {
         var transientPrevious4 = 0.0
     }
 
-    private enum OutputProfile {
+    enum OutputProfile {
         case personalAudio
         case builtInSpeaker
     }
@@ -823,6 +823,21 @@ final class GameAudioEngine: @unchecked Sendable {
         // 12 ms keeps gameplay responsive while leaving enough audio scheduling room for assistive audio.
         try session.setPreferredIOBufferDuration(0.012)
         try session.setActive(true)
+        routeAwayFromReceiverIfNeeded()
+    }
+
+    /// Forces playback off the built-in receiver (earpiece).
+    ///
+    /// The `.playback` category should never select the receiver on its own,
+    /// but a session can land there after another app, a call, or a mode change
+    /// leaves the route in that state. When it happens the game is almost
+    /// inaudible, so this moves output back to the speaker. It deliberately
+    /// does nothing when headphones or any other external route is attached.
+    private func routeAwayFromReceiverIfNeeded() {
+        let session = AVAudioSession.sharedInstance()
+        let outputs = session.currentRoute.outputs
+        guard outputs.contains(where: { $0.portType == .builtInReceiver }) else { return }
+        try? session.overrideOutputAudioPort(.speaker)
     }
 
     private func handleAudioSessionInterruption(rawType: UInt?) {
@@ -909,6 +924,11 @@ final class GameAudioEngine: @unchecked Sendable {
         let profile = currentOutputProfile()
         guard force || profile != outputProfile else { return }
         outputProfile = profile
+        // Reassert the route whenever it changes. Unplugging headphones can
+        // leave playback on the receiver, which is why removing AirPods
+        // mid-match used to drop the game to a near-silent earpiece while
+        // VoiceOver still played through the speaker.
+        routeAwayFromReceiverIfNeeded()
         configureSpatialEnvironment(dryEnvironment, for: profile)
         configureSpatialEnvironment(wetEnvironment, for: profile)
         configureRendering(for: malletSlideVoice, profile: profile)
@@ -922,30 +942,55 @@ final class GameAudioEngine: @unchecked Sendable {
     }
 
     private func currentOutputProfile() -> OutputProfile {
-        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
-        guard !outputs.isEmpty else { return .personalAudio }
+        Self.outputProfile(forPortTypes: AVAudioSession.sharedInstance()
+            .currentRoute.outputs.map(\.portType))
+    }
+
+    /// Classifies a route into a rendering profile. Separated from the live
+    /// session so it can be tested directly — this decision drove a 1.0.5
+    /// regression that sent all game audio to the earpiece.
+    nonisolated static func outputProfile(forPortTypes portTypes: [AVAudioSession.Port]) -> OutputProfile {
+        // An empty route means the session isn't active yet. Assume the speaker:
+        // guessing headphones here applies HRTF to speaker playback, which
+        // sounds thin and off-centre for players who never plug anything in.
+        guard !portTypes.isEmpty else { return .builtInSpeaker }
         let personalAudioPorts: Set<AVAudioSession.Port> = [
             .headphones,
             .bluetoothA2DP,
             .bluetoothHFP,
             .bluetoothLE,
-            .airPlay
+            .airPlay,
+            .usbAudio,
+            .carAudio
         ]
-        let speakerPorts: Set<AVAudioSession.Port> = [
-            .builtInSpeaker,
-            .builtInReceiver
-        ]
-        if outputs.contains(where: { personalAudioPorts.contains($0.portType) }) {
+        if portTypes.contains(where: { personalAudioPorts.contains($0) }) {
             return .personalAudio
         }
-        if outputs.contains(where: { speakerPorts.contains($0.portType) }) {
-            return .builtInSpeaker
-        }
-        return .personalAudio
+        // Everything else — built-in speaker, receiver, or an unfamiliar port —
+        // is treated as loudspeaker playback.
+        return .builtInSpeaker
+    }
+
+    /// The session mode is deliberately `.default` for every route.
+    ///
+    /// `.measurement` was previously used for headphone playback because it
+    /// disables system signal processing and keeps the spatial cues clean. But
+    /// iOS treats measurement as a call-like mode: with the `.playback`
+    /// category it routes to the built-in *receiver* (the earpiece) rather than
+    /// the speaker. On a phone with no headphones attached that made game audio
+    /// nearly silent, while VoiceOver — which uses its own session — still came
+    /// out of the speaker.
+    ///
+    /// `.default` keeps speaker output correct and costs nothing audible: the
+    /// spatial work is done by AVAudioEnvironmentNode (HRTF for headphones,
+    /// equal-power panning for the speaker), not by the session mode.
+    nonisolated static func audioSessionMode(for profile: OutputProfile) -> AVAudioSession.Mode {
+        _ = profile
+        return .default
     }
 
     private func audioSessionMode(for profile: OutputProfile) -> AVAudioSession.Mode {
-        profile == .personalAudio ? .measurement : .default
+        Self.audioSessionMode(for: profile)
     }
 
     private func configureSpatialEnvironment(_ environment: AVAudioEnvironmentNode, for profile: OutputProfile) {
