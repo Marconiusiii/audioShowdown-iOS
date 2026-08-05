@@ -642,7 +642,7 @@ final class GameModel: ObservableObject {
         } else {
             phase = .waitingForServe
             lockServeInput(for: 1.1)
-            announce("Board Ball. \(againstPlayer ? "Computer" : "You") scores one point. \(serveAnnouncement)")
+            announce("Board Ball! \(againstPlayer ? "Computer" : "You") scored 1 point. \(serveAnnouncement)")
         }
     }
 
