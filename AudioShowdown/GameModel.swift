@@ -49,6 +49,10 @@ final class GameModel: ObservableObject {
     private var lastHitByPlayer: Bool?
     private var progressY = 600.0
     private var progressTime: TimeInterval = 0
+    private var opponentAimOffset = 0.0
+    private var nextOpponentAimTime: TimeInterval = 0
+    private var opponentReactsAfter: TimeInterval = 0
+    private var puckWasInOpponentHalf = false
     private var previousTrainingPoint: CGPoint?
     private var previousTrainingMoveTime: TimeInterval?
     private var phaseBeforePause: Phase?
@@ -117,6 +121,28 @@ final class GameModel: ObservableObject {
 
     static func gameTimeScale(speed: Double) -> Double {
         0.45 * pow(2.6 / 0.45, (speed - 1) / 9)
+    }
+
+    /// How far the computer's aim can drift from the puck, in table units.
+    /// A weak opponent misreads the puck by up to a paddle width or so; a
+    /// strong one is nearly exact.
+    static func opponentAimError(skill: Double) -> Double {
+        let t = min(max((skill - 1) / 9, 0), 1)
+        return 150 * pow(1 - t, 1.6)
+    }
+
+    /// How long the computer waits before reacting to a change in the puck's
+    /// path. Low skill hesitates; high skill is immediate.
+    static func opponentReactionDelay(skill: Double) -> TimeInterval {
+        let t = min(max((skill - 1) / 9, 0), 1)
+        return 0.34 * pow(1 - t, 1.4)
+    }
+
+    /// How often the computer picks a fresh aim point. Slower re-aiming at low
+    /// skill means a stale, wrong target persists long enough to cost a save.
+    static func opponentAimRefreshInterval(skill: Double) -> TimeInterval {
+        let t = min(max((skill - 1) / 9, 0), 1)
+        return 0.55 - 0.42 * t
     }
 
     static func serveAnnouncement(server: Server, serveNumber: Int, playerScore: Int, computerScore: Int) -> String {
@@ -278,7 +304,7 @@ final class GameModel: ObservableObject {
         movePlayer(to: point)
     }
 
-    func touchEnded(wasTap: Bool, at _: CGPoint) {
+    func touchEnded(wasTap: Bool, at point: CGPoint) {
         audio.stopMalletSlide()
         placingPuck = false
         guard wasTap else { return }
@@ -286,7 +312,9 @@ final class GameModel: ObservableObject {
         let window = phase == .gameOver || phase == .training ? 0.65 : 0.4
         tapCount = now - lastTapTime < window ? tapCount + 1 : 1
         lastTapTime = now
-        if (phase == .waitingForServe || phase == .placedServe || phase == .live), tapCount >= 2 {
+        // Pausing lives in the opponent's half so quick defensive dabs in the
+        // player's own half can never be mistaken for a double-tap.
+        if (phase == .waitingForServe || phase == .placedServe || phase == .live), point.y < Self.center, tapCount >= 2 {
             togglePause()
             tapCount = 0
         } else if phase == .gameOver {
@@ -333,6 +361,8 @@ final class GameModel: ObservableObject {
         phaseBeforePause = nil
         puck = Disc(x: 300, y: 600); phase = .waitingForServe; previousTime = nil
         recentSideWallHits = []
+        opponentAimOffset = 0; nextOpponentAimTime = 0
+        opponentReactsAfter = 0; puckWasInOpponentHalf = false
         resetPuckRecoveryState()
         announce(serveAnnouncement)
     }
@@ -364,14 +394,36 @@ final class GameModel: ObservableObject {
         let maxSpeed = 380 + 670 * t
         let puckSpeed = hypot(puck.vx, puck.vy)
         let slowNearOpponentGoal = puck.y < 150 && puckSpeed < 420
-        let targetX = phase == .live && puck.y < Self.center && !slowNearOpponentGoal ? puck.x : 300.0
+        let now = Date.timeIntervalSinceReferenceDate
+        let puckIsInOpponentHalf = puck.y < Self.center
+
+        // The puck entering the computer's half is the moment it has to react
+        // to. A weaker opponent takes longer to get going and holds its
+        // position while it hesitates.
+        if puckIsInOpponentHalf, !puckWasInOpponentHalf {
+            opponentReactsAfter = now + Self.opponentReactionDelay(skill: settings.opponentSkill)
+            nextOpponentAimTime = 0
+        }
+        puckWasInOpponentHalf = puckIsInOpponentHalf
+
+        // Re-aim on an interval rather than every frame, so a wrong read
+        // persists long enough to matter at low skill.
+        if now >= nextOpponentAimTime {
+            nextOpponentAimTime = now + Self.opponentAimRefreshInterval(skill: settings.opponentSkill)
+            let error = Self.opponentAimError(skill: settings.opponentSkill)
+            opponentAimOffset = error > 0 ? Double.random(in: -error...error) : 0
+        }
+
+        let hesitating = phase == .live && puckIsInOpponentHalf && now < opponentReactsAfter
+        let chasing = phase == .live && puckIsInOpponentHalf && !slowNearOpponentGoal && !hesitating
+        let targetX = chasing ? puck.x + opponentAimOffset : 300.0
         let targetY: Double
-        if phase == .live && puck.y < Self.center {
+        if phase == .live && puckIsInOpponentHalf && !hesitating {
             targetY = slowNearOpponentGoal ? 210.0 : max(90.0, puck.y - 80)
         } else {
             targetY = 180.0
         }
-        let dx = targetX - opponentMallet.x, dy = targetY - opponentMallet.y
+        let dx = clamp(targetX, 44, Self.width - 44) - opponentMallet.x, dy = targetY - opponentMallet.y
         let length = max(1, hypot(dx, dy)), distance = min(maxSpeed * realDt * timeScale, length)
         let previousX = opponentMallet.x
         let previousY = opponentMallet.y

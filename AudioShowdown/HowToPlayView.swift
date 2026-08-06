@@ -63,7 +63,7 @@ struct HowToPlayView: View {
                         "Goals are worth one point, serves alternate after every goal, and the first to seven wins outright with no two-point lead required. There are no Board Balls."
                     ])
                     section("Gestures", rows: [
-                        "During a match, double-tap the table to pause. The pause screen sits outside Direct Touch, so your usual VoiceOver navigation works there for resuming, Settings, or End Game.",
+                        "During a match, double-tap the upper half of the table, the computer’s side, to pause. Your own half stays clear for play, so a quick double dab at the puck will never pause on you. The pause screen sits outside Direct Touch, so your usual VoiceOver navigation works there for resuming, Settings, or End Game.",
                         "After a match, double-tap the table to play again, or triple-tap to return home.",
                         "In practice, double-tap the table to return home.",
                         "Leaving the app mid-match pauses the game for you. It is still waiting when you come back."

@@ -176,6 +176,58 @@ struct AudioShowdownTests {
         #expect(model.phase == .waitingForServe)
     }
 
+    @Test func lowerHalfDoubleTapDoesNotPauseDuringPlay() {
+        let suiteName = "AudioShowdownTests.LowerHalfTap.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = GameModel(settings: GameSettings(defaults: defaults), training: false, audio: GameAudioEngine())
+
+        // Two quick dabs in the player's own defensive half must not pause.
+        let dab = CGPoint(x: 300, y: 1000)
+        model.touchBegan(at: dab)
+        model.touchEnded(wasTap: true, at: dab)
+        model.touchBegan(at: dab)
+        model.touchEnded(wasTap: true, at: dab)
+
+        #expect(model.phase != .paused)
+    }
+
+    @Test func upperHalfDoubleTapStillPausesDuringPlay() {
+        let suiteName = "AudioShowdownTests.UpperHalfLive.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = GameModel(settings: GameSettings(defaults: defaults), training: false, audio: GameAudioEngine())
+
+        let upper = CGPoint(x: 300, y: 200)
+        model.touchBegan(at: upper)
+        model.touchEnded(wasTap: true, at: upper)
+        model.touchBegan(at: upper)
+        model.touchEnded(wasTap: true, at: upper)
+
+        #expect(model.phase == .paused)
+    }
+
+    @Test func opponentErrorShrinksAsSkillRises() {
+        #expect(GameModel.opponentAimError(skill: 1) > GameModel.opponentAimError(skill: 5))
+        #expect(GameModel.opponentAimError(skill: 5) > GameModel.opponentAimError(skill: 10))
+        #expect(GameModel.opponentAimError(skill: 10) < 1)
+
+        #expect(GameModel.opponentReactionDelay(skill: 1) > GameModel.opponentReactionDelay(skill: 10))
+        #expect(GameModel.opponentReactionDelay(skill: 10) < 0.01)
+
+        #expect(
+            GameModel.opponentAimRefreshInterval(skill: 1)
+                > GameModel.opponentAimRefreshInterval(skill: 10)
+        )
+    }
+
+    @Test func opponentTuningStaysSaneOutsideTheSliderRange() {
+        #expect(GameModel.opponentAimError(skill: 0) == GameModel.opponentAimError(skill: 1))
+        #expect(GameModel.opponentAimError(skill: 99) == GameModel.opponentAimError(skill: 10))
+        #expect(GameModel.opponentReactionDelay(skill: 0) >= 0)
+        #expect(GameModel.opponentAimRefreshInterval(skill: 99) > 0)
+    }
+
     @Test func oldApproachPulseSettingMigratesToMediumWithSpeedup() {
         let suiteName = "AudioShowdownTests.PulseMigration.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
