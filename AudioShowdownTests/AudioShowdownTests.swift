@@ -94,8 +94,8 @@ struct AudioShowdownTests {
         let bottomInterval = GameModel.puckPulseInterval(speed: 2, speedsUpWhenApproaching: true, proximity: 1)
         #expect(topInterval > centerInterval)
         #expect(centerInterval > bottomInterval)
-        #expect(abs(topInterval - 0.25) < 0.0001)
-        #expect(abs(bottomInterval - 0.058) < 0.0001)
+        #expect(abs(topInterval - 0.284) < 0.0001)
+        #expect(abs(bottomInterval - 0.092) < 0.0001)
     }
 
     @Test func pulseSpeedRemainsConstantWhenApproachSpeedupIsOff() {

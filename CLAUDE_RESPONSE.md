@@ -1,46 +1,46 @@
-# Serve Rule Change — Two Serves Per Turn
+# The Ping Test Failure — Explained and Fixed
 
-## What Changed
+## Short Version
 
-### Game code
+My earlier guess was wrong. I said the timing constants had probably been retuned and the test was left behind. The opposite happened. The constants are correct and the test expectations are the stale part, and they went stale because of a revert.
 
-In `AudioShowdown/GameModel.swift` I added a named constant, `servesPerTurn`, set to two, with a comment noting it comes from competitive Power Showdown. `nextShowdownServe` now compares against that constant instead of the hard-coded five. That was the only logic change needed. Every other part of the game reads the serve rule through this one function, so service changes, the serve ordinal in the spoken announcement, and Board Ball service advancement all followed automatically.
+## What Actually Happened
 
-Air Hockey Mode is untouched, as it should be. It alternates serves after every goal and never consulted the Showdown serve count.
+You did a run of multiplayer-readiness refactors and then reverted all five of them. The relevant one is `fb2fe17`, which extracted gameplay rules into a dedicated `GameRules` type, and `554f7a1`, which reverted it.
 
-### Tests
+Here is the sequence for this test:
 
-In `AudioShowdownTests/AudioShowdownTests.swift`:
+1. Before the refactor, the test expected 0.25 and 0.058.
+2. Commit `fb2fe17` extracted the rules into `GameRules`. As part of that work, the ping timing constants were retuned, and the test was correctly updated in the same commit to expect 0.284 and 0.092.
+3. Commit `554f7a1` reverted that refactor. The revert pulled the test expectations back to the old 0.25 and 0.058, but the retuned constants stayed in `GameModel`.
 
-- Renamed and rewrote the service-change test for the new boundary. It now confirms serve one advances to serve two with the same server, and serve two hands service to the opponent and resets the count.
-- Added a round-trip test that walks a full service cycle for both players and confirms service comes back to the player with the count reset. It is written in terms of `servesPerTurn`, so it will keep testing the right thing if the rule ever changes again.
-- Adjusted the serve announcement test, which was checking the phrase "your third serve." A third serve is unreachable now, so that assertion was testing a state the game can no longer enter. It checks the first serve wording instead, which still covers the ordinal-word conversion the test exists for.
+So the revert was partial in effect. It undid the test's expectations but not the constant values they were measuring. That is why the test has been failing on `main` ever since, with no single commit that looks like it broke anything.
 
-### Copy
+## Confirming the Numbers
 
-Updated in three places so nothing still claims five:
+`puckPulseInterval` at speed two currently uses a near interval of 0.092 and a far addition of 0.192. Working the formula by hand:
 
-- `AudioShowdown/HowToPlayView.swift`, in the Showdown Rules section, and in the Serving section where the example now reads "your second serve" and explains that service changes after it.
-- `README.md`
-- `marketing/index.html`
+- At proximity 0, the puck is at the far end: 0.092 plus 0.192 gives 0.284.
+- At proximity 1, the puck is at your goal: 0.092 with no addition.
 
-I checked `appStore/GameCenterReleaseGuide.md`. Its mentions of serves are a generic manual test checklist, not a statement of the rule, so it needed no change.
+Those are exactly the values the test expected after the refactor, and exactly what the revert stripped out. The current gameplay tuning is the intended one.
+
+## The Fix
+
+I restored the two expectations in `AudioShowdownTests/AudioShowdownTests.swift` to 0.284 and 0.092. That is the only change. I did not touch `GameModel`, because the constants there were never wrong.
+
+Worth noting: the two ordering assertions in that test, that intervals shrink as the puck approaches, passed the entire time. The behavior the test exists to protect never regressed. Only the exact magnitude checks were out of date, which is why this went unnoticed.
 
 ## Test Results
 
-Both serve tests pass, along with the rest of the unit suite.
+The full unit suite passes, twenty-eight tests across `AudioShowdownTests` and `AudioRoutingTests`, including both new serve tests and the repaired ping test.
 
-Four tests failed in the full run. None are related to this change:
+The three UI test failures from the earlier run are unrelated and still environmental. The simulator was denying launch of the UI test runner process, which is not an assertion failure and not something in the code.
 
-- Three UI tests failed because the simulator refused to launch the UI test runner process. These are launch-denial errors from the simulator, not assertion failures. This is environment flakiness.
-- `puckPingsAccelerateTowardPlayer` fails, and it is a genuine pre-existing failure unrelated to serves. I verified this by stashing my changes and running the unit suite on clean `main`, where it fails identically.
+## One Thing Worth Checking
 
-## About That Pre-Existing Failure
-
-The test asserts that the pulse interval at speed two, full proximity, equals about 0.058. Reading `puckPulseInterval`, that call returns `nearIntervals[2]`, which is 0.092. The other assertion in the same test expects about 0.25 for the far end, and the code produces 0.092 plus 0.192, which is 0.284. So both magnitude assertions disagree with the current constants, while the two ordering assertions in that test still hold.
-
-That pattern suggests the ping timing constants were retuned at some point and this test was not updated. The ordering behavior it was really guarding, pings getting faster as the puck approaches, still works correctly. I have not touched it, since it is outside this task. Say the word and I will either update the expected numbers to match the current tuning or dig into whether the constants themselves drifted from what you intended.
+Four other reverts landed in that same batch, covering a gameplay snapshot type, a passive event stream, a codable input model, and a multiplayer session boundary. If any of those also retuned a constant while updating its tests, the same partial-revert pattern could be sitting in the codebase unnoticed. Nothing is currently failing, so if it happened elsewhere it did not leave a broken test behind. I have not gone looking. Say the word if you want me to audit those four reverts for the same shape of problem.
 
 ## Commit Message
 
-Changed Showdown service to switch after two serves instead of five, matching competitive Power Showdown rules. The serve count now lives in a named constant on GameModel rather than a bare literal in the service-advance function, so the rule is stated in one place. Because service changes, the spoken serve ordinal, and Board Ball service advancement all route through that one function, no other game logic needed changing, and Air Hockey Mode is unaffected since it alternates serves after every goal. Updated the service-change test to the new boundary and added a round-trip test covering a full cycle back to the original server, written against the constant so it survives future rule changes. Also moved the serve announcement test off a third serve, which the game can no longer reach. Instructions, README, and the marketing page were updated to say two serves.
+Repaired the puck ping interval test, which had been failing on main since the GameRules refactor was reverted. The refactor retuned the pulse timing constants and updated this test's expected values in the same commit, but the revert rolled back only the test expectations and left the retuned constants in place, so the test has been measuring current behavior against pre-refactor numbers ever since. The constants are correct, so this restores the expected values to 0.284 and 0.092 to match what puckPulseInterval actually produces at speed two. The ordering assertions in this test never failed, which is why the drift went unnoticed: the behavior under test was fine and only the magnitude checks were stale.
