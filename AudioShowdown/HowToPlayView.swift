@@ -34,13 +34,13 @@ struct HowToPlayView: View {
                         "2. On your serve, press a finger anywhere on your half to set the puck down there.",
                         "3. Keeping that finger down, swipe through the puck to send it up the table.",
                         "4. Follow the puck by ear as it travels up, and listen for the computer to knock it back.",
-                        "5. As it comes back toward you it gets louder and the cues quicken. Drag to slide your paddle into its path and send it back.",
+                        "5. As it comes back toward you it gets louder and the pulses quicken. Drag to slide your paddle into its path and send it back.",
                         "6. Get it past the computer’s paddle and into the top goal, and you score."
                     ])
                     section("Reading the Sound", rows: [
                         "Left and right tell you where the puck is across the table. Center it in your ears and it is heading down the middle.",
                         "Volume tells you how close it is to your goal. The louder it gets, the sooner you need to be in front of it.",
-                        "The cue rate quickens as the puck closes on you, so a rising urgency means it is coming your way.",
+                        "The pulse rate quickens as the puck closes in on you, so a rising urgency means it is coming your way.",
                         "The center crossing sound marks the puck passing the halfway line. Hearing it means the puck has entered your half and the point is now yours to defend.",
                         "Whether pitch rises or falls with distance is yours to set in Settings. Pick the direction that matches how you hear it."
                     ])
@@ -50,13 +50,13 @@ struct HowToPlayView: View {
                         "Guard the bottom goal, then send the puck back up toward the computer’s goal at the top."
                     ])
                     section("Serving", rows: [
-                        "On your serve, press your half of the table to place the puck, keep your finger down, then swipe through it to serve.",
+                        "On your serve, press your half of the table to place the puck, keep your finger down, then swipe up through it to serve.",
                         "On the computer’s serve, settle in and defend. The announcement counts your serves, so “your second serve” means service changes after this one."
                     ])
                     section("Showdown Rules", rows: [
                         "Goals are worth two points. First to eleven wins, and you need a two-point lead to take it.",
                         "Each player serves twice, then service changes.",
-                        "Send the puck across the center line fast enough and it may catch the center board. That is a Board Ball: it does not happen on every hard shot, but when it does the other player takes a point and the next serve begins. Board Balls are Showdown only."
+                        "Send the puck across the center line fast enough and it may catch the center board. That is a Board Ball: it does not happen on every hard shot, but when it does the other player takes a point and the next serve begins. Board Balls are Showdown only and both you and the computer can get them."
                     ])
                     section("Air Hockey Mode", rows: [
                         "Turn on Air Hockey Mode in Settings for a shorter, simpler match.",
