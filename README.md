@@ -34,7 +34,7 @@ If you use VoiceOver, use the rotor to turn on Direct Touch for Audio Showdown. 
 
 ## The rules
 
-**Showdown.** Goals are worth two points. First to eleven wins, but you need a two-point lead. Each player gets five serves before service changes. A very hard hit can strike the center board — that is a Board Ball, the other player gets one point, and the next serve begins.
+**Showdown.** Goals are worth two points. First to eleven wins, but you need a two-point lead. Each player gets two serves before service changes. A very hard hit can strike the center board — that is a Board Ball, the other player gets one point, and the next serve begins.
 
 **Air Hockey Mode.** A simpler rule set you can switch on in Settings: goals are worth one point, serves alternate after each goal, and first to seven wins.
 

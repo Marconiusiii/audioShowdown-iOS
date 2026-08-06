@@ -1,112 +1,46 @@
-# Earpiece Audio Regression — Found and Fixed
+# Serve Rule Change — Two Serves Per Turn
 
-Found it. This is a real bug with three interacting causes, and it explains
-every symptom you described, including the strange ones.
+## What Changed
 
-## Root cause
+### Game code
 
-The audio session was being configured with `.measurement` mode whenever the
-game thought headphones were attached.
+In `AudioShowdown/GameModel.swift` I added a named constant, `servesPerTurn`, set to two, with a comment noting it comes from competitive Power Showdown. `nextShowdownServe` now compares against that constant instead of the hard-coded five. That was the only logic change needed. Every other part of the game reads the serve rule through this one function, so service changes, the serve ordinal in the spoken announcement, and Board Ball service advancement all followed automatically.
 
-iOS treats `.measurement` as a **call-like mode**. Combined with the `.playback`
-category, it selects the built-in *receiver* — the earpiece you hold to your ear
-— instead of the speaker. That is exactly the behaviour you heard: game audio
-relegated to the earpiece and nearly silent.
+Air Hockey Mode is untouched, as it should be. It alternates serves after every goal and never consulted the Showdown serve count.
 
-The reason VoiceOver still worked through the speaker is that VoiceOver owns its
-own audio session, entirely separate from the game's. So the system voice stayed
-correct while the game was stranded on the earpiece. Same for the pause screen,
-which is why pausing appeared to fix things.
+### Tests
 
-## Why it stayed broken
+In `AudioShowdownTests/AudioShowdownTests.swift`:
 
-Two further problems kept it stuck there:
+- Renamed and rewrote the service-change test for the new boundary. It now confirms serve one advances to serve two with the same server, and serve two hands service to the opponent and resets the count.
+- Added a round-trip test that walks a full service cycle for both players and confirms service comes back to the player with the count reset. It is written in terms of `servesPerTurn`, so it will keep testing the right thing if the rule ever changes again.
+- Adjusted the serve announcement test, which was checking the phrase "your third serve." A third serve is unreachable now, so that assertion was testing a state the game can no longer enter. It checks the first serve wording instead, which still covers the ordinal-word conversion the test exists for.
 
-**The route was misclassified.** `currentOutputProfile()` returned "headphones"
-whenever the route list was empty or held an unfamiliar port. The route *is*
-empty in the moments before the session activates — so on a phone with nothing
-plugged in, the game picked headphone mode at startup and set `.measurement`.
-That is why starting a round without headphones failed immediately.
+### Copy
 
-**Route changes never re-applied the session.** `refreshOutputProfile` updated
-spatial rendering when the route changed, but never re-ran the session
-configuration. So the `.measurement` mode chosen at launch persisted for the
-entire app lifetime. That is why pulling out AirPods dropped you back to a
-silent earpiece — the route changed, but the session mode never followed.
+Updated in three places so nothing still claims five:
 
-The volume-button behaviour fits too: pressing volume nudges iOS into
-re-evaluating the route, audio moves to the speaker briefly, then the stale
-session configuration reasserts itself and it falls back to the earpiece.
+- `AudioShowdown/HowToPlayView.swift`, in the Showdown Rules section, and in the Serving section where the example now reads "your second serve" and explains that service changes after it.
+- `README.md`
+- `marketing/index.html`
 
-## The fixes
+I checked `appStore/GameCenterReleaseGuide.md`. Its mentions of serves are a generic manual test checklist, not a statement of the rule, so it needed no change.
 
-All three, in `GameAudioEngine.swift`:
+## Test Results
 
-1. **`.measurement` is gone.** The session now uses `.default` for every route.
-   This costs nothing audible — the spatial work is done by
-   `AVAudioEnvironmentNode` (HRTF for headphones, equal-power panning for the
-   speaker), not by the session mode. The mode was never buying the spatial
-   quality it appeared to.
+Both serve tests pass, along with the rest of the unit suite.
 
-2. **An unknown or empty route now means speaker.** Only genuine personal-audio
-   ports — wired headphones, Bluetooth A2DP/HFP/LE, AirPlay, USB, and car audio
-   — select headphone rendering. The earpiece is explicitly classified as
-   loudspeaker playback. USB and car audio are new; they were previously
-   misfiled as speaker output.
+Four tests failed in the full run. None are related to this change:
 
-3. **The route is reasserted on every change.** A new
-   `routeAwayFromReceiverIfNeeded()` calls `overrideOutputAudioPort(.speaker)`
-   whenever playback lands on the receiver, and it runs both at session setup
-   and on every route change. It deliberately does nothing when headphones are
-   attached, so it can never steal audio away from your AirPods.
+- Three UI tests failed because the simulator refused to launch the UI test runner process. These are launch-denial errors from the simulator, not assertion failures. This is environment flakiness.
+- `puckPingsAccelerateTowardPlayer` fails, and it is a genuine pre-existing failure unrelated to serves. I verified this by stashing my changes and running the unit suite on clean `main`, where it fails identically.
 
-Interruption recovery already re-runs the session setup, so it inherits all of
-this automatically.
+## About That Pre-Existing Failure
 
-## Tests
+The test asserts that the pulse interval at speed two, full proximity, equals about 0.058. Reading `puckPulseInterval`, that call returns `nearIntervals[2]`, which is 0.092. The other assertion in the same test expects about 0.25 for the far end, and the code produces 0.092 plus 0.192, which is 0.284. So both magnitude assertions disagree with the current constants, while the two ordering assertions in that test still hold.
 
-There was **no test coverage at all** for output routing, which is how a
-regression this severe shipped in 1.0.5.
+That pattern suggests the ping timing constants were retuned at some point and this test was not updated. The ordering behavior it was really guarding, pings getting faster as the puck approaches, still works correctly. I have not touched it, since it is outside this task. Say the word and I will either update the expected numbers to match the current tuning or dig into whether the constants themselves drifted from what you intended.
 
-`AudioShowdownTests/AudioRoutingTests.swift` now covers it — 10 tests, all
-passing, including your two stated requirements directly:
+## Commit Message
 
-- No route, built-in speaker, built-in receiver, and unknown ports all resolve
-  to speaker rendering.
-- Wired, Bluetooth, AirPlay, USB, and car audio all resolve to personal audio.
-- Headphones win when the route momentarily lists both (AirPods connecting
-  mid-match).
-- Removing headphones returns to speaker rendering.
-- And a direct guard that the session mode is **never** `.measurement`.
-
-## What I could not verify
-
-I confirmed this builds and that the routing logic is correct under test, but I
-**cannot verify the actual audio output** — the Simulator does not reproduce
-real device routing, and you have no device at hand. The logic error is
-unambiguous and the fix is well-understood iOS behaviour, but the real
-confirmation is you starting a round on a phone with no headphones and hearing
-the puck through the speaker.
-
-Worth testing on device, in this order:
-
-1. Start a round with no headphones — puck, mallet, and all cues through the
-   speaker.
-2. Insert AirPods mid-match — audio should move to them.
-3. Remove them mid-match — audio should return to the speaker, not the earpiece.
-4. Take a phone call mid-match and hang up — audio should recover to the
-   speaker.
-
-## One unrelated thing
-
-`AudioShowdownTests.puckPingsAccelerateTowardPlayer()` fails, but it fails
-identically at clean HEAD (3c74ff4) — I checked against a fresh worktree, so it
-predates my changes. It concerns pulse-interval timing math, nothing to do with
-audio routing. Say the word and I will look at it separately.
-
-## Screenshots
-
-Set aside, as you asked. The staging system is complete and working — both
-gameplay shots and all nine theme captures came out at correct App Store
-dimensions for iPhone and iPad. The only piece left is the Settings capture,
-which fails on a simulator launch quirk, and compositing the theme sampler.
+Changed Showdown service to switch after two serves instead of five, matching competitive Power Showdown rules. The serve count now lives in a named constant on GameModel rather than a bare literal in the service-advance function, so the rule is stated in one place. Because service changes, the spoken serve ordinal, and Board Ball service advancement all route through that one function, no other game logic needed changing, and Air Hockey Mode is unaffected since it alternates serves after every goal. Updated the service-change test to the new boundary and added a round-trip test covering a full cycle back to the original server, written against the constant so it survives future rule changes. Also moved the serve announcement test off a third serve, which the game can no longer reach. Instructions, README, and the marketing page were updated to say two serves.

@@ -4,7 +4,7 @@ appStore/
 graphics/
 marketing/
 sourceWordList/
-
+CLAUDE_RESPONSE.md
 ## Assistant / agent working files
 .claude/
 CLAUDE.local.md

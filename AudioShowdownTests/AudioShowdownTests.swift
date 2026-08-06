@@ -63,13 +63,23 @@ struct AudioShowdownTests {
         #expect(GameModel.isWinningScore(player: 7, opponent: 6, airHockeyMode: true))
     }
 
-    @Test func showdownServiceChangesAfterFiveServes() {
-        let sameServer = GameModel.nextShowdownServe(server: .player, serveNumber: 4)
+    @Test func showdownServiceChangesAfterTwoServes() {
+        let sameServer = GameModel.nextShowdownServe(server: .player, serveNumber: 1)
         #expect(sameServer.0 == .player)
-        #expect(sameServer.1 == 5)
-        let changedServer = GameModel.nextShowdownServe(server: .player, serveNumber: 5)
+        #expect(sameServer.1 == 2)
+        let changedServer = GameModel.nextShowdownServe(server: .player, serveNumber: 2)
         #expect(changedServer.0 == .opponent)
         #expect(changedServer.1 == 1)
+    }
+
+    @Test func showdownServiceReturnsToPlayerAfterBothTurns() {
+        var server = GameModel.Server.player
+        var serveNumber = 1
+        for _ in 0..<(GameModel.servesPerTurn * 2) {
+            (server, serveNumber) = GameModel.nextShowdownServe(server: server, serveNumber: serveNumber)
+        }
+        #expect(server == .player)
+        #expect(serveNumber == 1)
     }
 
     @Test func playerProximityIncreasesTowardBottomOfTable() {
@@ -186,10 +196,10 @@ struct AudioShowdownTests {
         #expect(
             GameModel.serveAnnouncement(
                 server: .player,
-                serveNumber: 3,
+                serveNumber: 1,
                 playerScore: 6,
                 computerScore: 4
-            ) == "Your third serve, 6 serving 4"
+            ) == "Your first serve, 6 serving 4"
         )
         #expect(
             GameModel.serveAnnouncement(

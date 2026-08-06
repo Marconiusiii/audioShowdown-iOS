@@ -68,8 +68,11 @@ final class GameModel: ObservableObject {
         return max(player, opponent) >= 11 && abs(player - opponent) >= 2
     }
 
+    /// Competitive Power Showdown gives each player two serves before service changes.
+    static let servesPerTurn = 2
+
     static func nextShowdownServe(server: Server, serveNumber: Int) -> (Server, Int) {
-        serveNumber >= 5 ? (server == .player ? .opponent : .player, 1) : (server, serveNumber + 1)
+        serveNumber >= servesPerTurn ? (server == .player ? .opponent : .player, 1) : (server, serveNumber + 1)
     }
 
     static func playerProximity(forY y: Double) -> Double {
