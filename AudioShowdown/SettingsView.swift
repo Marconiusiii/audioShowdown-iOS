@@ -6,6 +6,28 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var previewHaptics = GameHapticsEngine()
 
+    // MARK: - Puck volume preview debounce
+    //
+    // REVERT NOTE: this debounce is self-contained and can be removed entirely
+    // by deleting this property, the `puckVolumePreviewDelay` constant, the
+    // `schedulePuckVolumePreview` and `cancelPuckVolumePreview` functions, the
+    // `.onDisappear` that calls cancel, and by restoring the Puck Volume
+    // slider's `valueChanged` to call `previewCurrentPuckSound()` directly.
+    // Nothing else depends on it.
+    //
+    // Why it exists: the Puck Volume slider fired a full preview on every step.
+    // Each preview synthesises its buffer synchronously on the main thread, so
+    // holding the control queued one blocking render behind another. That is
+    // inaudible on Bluetooth, where 150-300 ms of inherent latency hides it,
+    // but plainly audible on low-latency wired headphones.
+    @State private var puckVolumePreviewTask: Task<Void, Never>?
+
+    /// Deliberately short. Long enough to coalesce a run of adjustments into a
+    /// single preview, but well inside the gap between VoiceOver announcing a
+    /// new value and the user pressing again, so the preview does not land on
+    /// top of speech or feel disconnected from the adjustment that caused it.
+    private let puckVolumePreviewDelay = Duration.milliseconds(180)
+
     private let puckSounds = ["Woodblock", "Marimba", "Tick", "Sine beep", "Square beep", "Pluck", "Cowbell", "Clave", "Water drop", "Sonar ping", "Piano", "Chime", "Glass", "Tom", "Laser"]
     private let smoothPuckSounds = ["Warm Tone", "Bell Tone", "Tick Tone", "Showdown Ball", "Sine Tone", "Square Tone", "Pluck Tone", "Cowbell Tone", "Clave Tone", "Water Tone", "Sonar Tone", "Piano Tone", "Chime Tone", "Glass Tone", "Laser Tone"]
     private let pitchNames = ["None", "Subtle", "Strong"]
@@ -118,8 +140,11 @@ struct SettingsView: View {
                             step: 0.05,
                             theme: theme,
                             valueChanged: { value in
+                                // The volume itself applies immediately so the
+                                // control stays responsive; only the audition
+                                // sound is coalesced.
                                 audioEngine.setPuckVolume(value)
-                                previewCurrentPuckSound()
+                                schedulePuckVolumePreview()
                             }
                         )
                         if settings.puckTrackingStyle == .pulse {
@@ -224,6 +249,7 @@ struct SettingsView: View {
             .toolbarBackground(theme.surface, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
         }
+        .onDisappear { cancelPuckVolumePreview() }
         .onChange(of: settings.pitchChangesWithDistance) { _, enabled in
             if enabled, settings.pitchBehavior == 0 {
                 settings.pitchBehavior = 1
@@ -273,6 +299,24 @@ struct SettingsView: View {
         } else {
             previewSmoothPuckSound(settings.smoothPuckSound)
         }
+    }
+
+    /// Coalesces a run of Puck Volume adjustments into one preview. Each call
+    /// replaces the pending one, so only the final value is auditioned.
+    private func schedulePuckVolumePreview() {
+        puckVolumePreviewTask?.cancel()
+        puckVolumePreviewTask = Task { @MainActor in
+            try? await Task.sleep(for: puckVolumePreviewDelay)
+            guard !Task.isCancelled else { return }
+            previewCurrentPuckSound()
+        }
+    }
+
+    /// Stops a pending preview from firing after the screen goes away, which
+    /// would otherwise play a puck sound over the main screen.
+    private func cancelPuckVolumePreview() {
+        puckVolumePreviewTask?.cancel()
+        puckVolumePreviewTask = nil
     }
 
     private func previewStrikeSound(_ index: Int) {
