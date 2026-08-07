@@ -69,7 +69,7 @@ final class GameAudioEngine: @unchecked Sendable {
         var transientPrevious4 = 0.0
     }
 
-    enum OutputProfile {
+    enum OutputProfile: Sendable {
         case personalAudio
         case builtInSpeaker
     }
@@ -1012,21 +1012,40 @@ final class GameAudioEngine: @unchecked Sendable {
     }
 
     private func spatialPosition(x: Double, proximity: Double) -> AVAudio3DPoint {
-        let normalized = clamp(x) * 2 - 1
-        if outputProfile == .builtInSpeaker {
+        Self.spatialPosition(x: clamp(x), proximity: clamp(proximity), profile: outputProfile)
+    }
+
+    /// Places a sound in the 3D field. Separated from the live engine so the
+    /// stereo width can be asserted directly — narrowing it has regressed
+    /// twice, and it is the single most important cue in the game.
+    ///
+    /// The horizontal spread is deliberately constant and very wide. It must
+    /// not narrow as the puck approaches: a puck against the near-left wall is
+    /// the most extreme left cue in the game, and shrinking the spread with
+    /// proximity pulls exactly that cue back toward centre. A 1.0.x build did
+    /// this (`6.2 - 1.6 * near²`) to tame fast close-range pulses and collapsed
+    /// the whole stereo field on headphones as a result. Fix pulse density in
+    /// the timing code, never by narrowing the field.
+    /// `profile` is optional because the engine has not classified the route
+    /// until the session activates. A nil profile takes the wide path, matching
+    /// the original behaviour: the narrow placement is reserved for a route
+    /// positively identified as the built-in speaker.
+    nonisolated static func spatialPosition(x: Double, proximity: Double, profile: OutputProfile?) -> AVAudio3DPoint {
+        let normalized = min(max(x, 0), 1) * 2 - 1
+        // The speaker has no stereo field to speak of, so equal-power panning
+        // across a unit width is all that is meaningful there.
+        if profile == .builtInSpeaker {
             return AVAudio3DPoint(x: Float(normalized), y: 0, z: -1)
         }
-        let near = clamp(proximity)
-        let nearWeight = near * near
-        let horizontalSpread = 6.2 - 1.6 * nearWeight
-        let horizontal = Float(normalized * horizontalSpread)
-        let depth = Float(-(0.95 + (1 - near) * 5.4))
+        let near = min(max(proximity, 0), 1)
+        let horizontal = Float(normalized * 12.0)
+        let depth = Float(-(0.35 + (1 - near) * 6.0))
         return AVAudio3DPoint(x: horizontal, y: 0, z: depth)
     }
 
     private func spatialEdgeGain(x: Double) -> Double {
         let edgeAmount = abs(clamp(x) - 0.5) * 2
-        return 1.0 + 0.18 * edgeAmount
+        return 1.0 + 0.34 * edgeAmount
     }
 
     private func renderMalletSlideLoop() -> AVAudioPCMBuffer {

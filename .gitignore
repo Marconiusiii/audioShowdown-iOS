@@ -6,6 +6,7 @@ marketing/
 sourceWordList/
 CLAUDE_RESPONSE.md
 HowToPlay.md
+TESTING_GUIDE.md
 ## Assistant / agent working files
 .claude/
 CLAUDE.local.md
