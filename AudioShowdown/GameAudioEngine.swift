@@ -75,8 +75,8 @@ final class GameAudioEngine: @unchecked Sendable {
     }
 
     private let engine = AVAudioEngine()
-    private let dryEnvironment = AVAudioEnvironmentNode()
-    private let wetEnvironment = AVAudioEnvironmentNode()
+    private let dryMixer = AVAudioMixerNode()
+    private let reverb = AVAudioUnitReverb()
     private let wetMixer = AVAudioMixerNode()
     private let sourceFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
     private let malletSlideVoice = SpatialVoice()
@@ -109,14 +109,15 @@ final class GameAudioEngine: @unchecked Sendable {
     private var isInterrupted = false
 
     init() {
-        engine.attach(dryEnvironment)
-        engine.attach(wetEnvironment)
+        engine.attach(dryMixer)
+        engine.attach(reverb)
         engine.attach(wetMixer)
-        engine.connect(dryEnvironment, to: engine.mainMixerNode, format: nil)
-        engine.connect(wetEnvironment, to: wetMixer, format: nil)
+        engine.connect(dryMixer, to: engine.mainMixerNode, format: nil)
+        engine.connect(reverb, to: wetMixer, format: nil)
         engine.connect(wetMixer, to: engine.mainMixerNode, format: nil)
-        dryEnvironment.reverbParameters.enable = false
-        wetEnvironment.reverbParameters.enable = true
+        // The reverb send is fully wet; its level in the mix is the wet mixer's
+        // output volume, set by `setReverb`.
+        reverb.wetDryMix = 100
         wetMixer.outputVolume = 0
         configure(voice: malletSlideVoice)
         configure(voice: smoothPuckVoice)
@@ -205,16 +206,13 @@ final class GameAudioEngine: @unchecked Sendable {
         reverbStyle = style
         switch style {
         case 1:
-            wetEnvironment.reverbParameters.loadFactoryReverbPreset(.smallRoom)
-            wetEnvironment.reverbParameters.level = 0
+            reverb.loadFactoryPreset(.smallRoom)
             wetMixer.outputVolume = 0.025
         case 2:
-            wetEnvironment.reverbParameters.loadFactoryReverbPreset(.largeRoom)
-            wetEnvironment.reverbParameters.level = 0
+            reverb.loadFactoryPreset(.largeRoom)
             wetMixer.outputVolume = 0.04
         case 3:
-            wetEnvironment.reverbParameters.loadFactoryReverbPreset(.largeHall)
-            wetEnvironment.reverbParameters.level = 0
+            reverb.loadFactoryPreset(.largeHall)
             wetMixer.outputVolume = 0.065
         default:
             wetMixer.outputVolume = 0
@@ -392,10 +390,10 @@ final class GameAudioEngine: @unchecked Sendable {
         }
         primeSmoothPuckQueue(generation: smoothPuckGeneration)
         let baseGain = volumeChangesWithDistance ? 0.86 + 0.14 * near : 0.94
-        let gain = Float(baseGain * clamp(volume) * spatialEdgeGain(x: x))
-        let position = spatialPosition(x: x, proximity: near)
-        smoothPuckVoice.dryPlayer.position = position
-        smoothPuckVoice.wetPlayer.position = position
+        let gain = Float(baseGain * clamp(volume))
+        let pan = Self.stereoPan(for: x)
+        smoothPuckVoice.dryPlayer.pan = pan
+        smoothPuckVoice.wetPlayer.pan = pan
         smoothPuckVoice.dryPlayer.volume = gain
         smoothPuckVoice.wetPlayer.volume = reverbStyle > 0 ? gain : 0
     }
@@ -504,9 +502,8 @@ final class GameAudioEngine: @unchecked Sendable {
             stopMalletSlide()
             return
         }
-        let gain = Float((0.025 + 0.30 * clamp(speed / 1_400)) * clamp(volume))
-        let compensatedGain = min(1.6, gain * Float(spatialEdgeGain(x: x)))
-        let position = spatialPosition(x: x, proximity: 0.95)
+        let compensatedGain = Float((0.025 + 0.30 * clamp(speed / 1_400)) * clamp(volume))
+        let pan = Self.stereoPan(for: x)
         if malletSlideStyle != 1 || !malletSlideVoice.dryPlayer.isPlaying {
             malletSlideStyle = 1
             let buffer = renderMalletSlideLoop()
@@ -523,8 +520,8 @@ final class GameAudioEngine: @unchecked Sendable {
         } else if reverbStyle == 0, malletSlideVoice.wetPlayer.isPlaying {
             malletSlideVoice.wetPlayer.stop()
         }
-        malletSlideVoice.dryPlayer.position = position
-        malletSlideVoice.wetPlayer.position = position
+        malletSlideVoice.dryPlayer.pan = pan
+        malletSlideVoice.wetPlayer.pan = pan
         malletSlideVoice.dryPlayer.volume = compensatedGain
         malletSlideVoice.wetPlayer.volume = reverbStyle > 0 ? compensatedGain : 0
     }
@@ -780,17 +777,17 @@ final class GameAudioEngine: @unchecked Sendable {
         }
     }
 
+    /// Wires a voice as a plain mono source into a stereo mixer.
+    ///
+    /// There is deliberately no spatialisation here. `AVAudioPlayerNode.pan`
+    /// on a mono source feeding a stereo mixer is a straight constant-power
+    /// stereo pan: -1 is fully left, +1 is fully right, and nothing models a
+    /// head. See `stereoPan(for:)` for why that is the requirement.
     private func configure(voice: SpatialVoice) {
         engine.attach(voice.dryPlayer)
         engine.attach(voice.wetPlayer)
-        engine.connect(voice.dryPlayer, to: dryEnvironment, format: sourceFormat)
-        engine.connect(voice.wetPlayer, to: wetEnvironment, format: sourceFormat)
-        voice.dryPlayer.sourceMode = .spatializeIfMono
-        voice.dryPlayer.renderingAlgorithm = .HRTFHQ
-        voice.dryPlayer.reverbBlend = 0
-        voice.wetPlayer.sourceMode = .spatializeIfMono
-        voice.wetPlayer.renderingAlgorithm = .HRTFHQ
-        voice.wetPlayer.reverbBlend = 100
+        engine.connect(voice.dryPlayer, to: dryMixer, format: sourceFormat)
+        engine.connect(voice.wetPlayer, to: reverb, format: sourceFormat)
     }
 
     private func ensureEngineRunning() -> Bool {
@@ -903,18 +900,20 @@ final class GameAudioEngine: @unchecked Sendable {
 
     private func play(_ buffer: AVAudioPCMBuffer, on voice: SpatialVoice, x: Double, proximity: Double) {
         guard ensureEngineRunning() else { return }
-        let position = spatialPosition(x: x, proximity: proximity)
-        let gain = Float(spatialEdgeGain(x: x))
+        // Proximity is carried by the buffer itself — pitch, timing, and the
+        // gain baked in by the caller. It must not affect the pan.
+        _ = proximity
+        let pan = Self.stereoPan(for: x)
         if voice.dryPlayer.isPlaying { voice.dryPlayer.stop() }
-        voice.dryPlayer.position = position
-        voice.dryPlayer.volume = gain
+        voice.dryPlayer.pan = pan
+        voice.dryPlayer.volume = 1
         voice.dryPlayer.scheduleBuffer(buffer)
         voice.dryPlayer.play()
 
         if reverbStyle > 0 {
             if voice.wetPlayer.isPlaying { voice.wetPlayer.stop() }
-            voice.wetPlayer.position = position
-            voice.wetPlayer.volume = gain
+            voice.wetPlayer.pan = pan
+            voice.wetPlayer.volume = 1
             voice.wetPlayer.scheduleBuffer(buffer)
             voice.wetPlayer.play()
         }
@@ -929,16 +928,8 @@ final class GameAudioEngine: @unchecked Sendable {
         // mid-match used to drop the game to a near-silent earpiece while
         // VoiceOver still played through the speaker.
         routeAwayFromReceiverIfNeeded()
-        configureSpatialEnvironment(dryEnvironment, for: profile)
-        configureSpatialEnvironment(wetEnvironment, for: profile)
-        configureRendering(for: malletSlideVoice, profile: profile)
-        configureRendering(for: smoothPuckVoice, profile: profile)
-        for voice in puckVoices {
-            configureRendering(for: voice, profile: profile)
-        }
-        for voice in effectVoices {
-            configureRendering(for: voice, profile: profile)
-        }
+        // Nothing else is route-dependent any more. Panning is identical on
+        // every output, so there is no per-route rendering to reconfigure.
     }
 
     private func currentOutputProfile() -> OutputProfile {
@@ -946,13 +937,15 @@ final class GameAudioEngine: @unchecked Sendable {
             .currentRoute.outputs.map(\.portType))
     }
 
-    /// Classifies a route into a rendering profile. Separated from the live
-    /// session so it can be tested directly — this decision drove a 1.0.5
+    /// Classifies a route as personal audio or loudspeaker. Separated from the
+    /// live session so it can be tested directly — this decision drove a 1.0.5
     /// regression that sent all game audio to the earpiece.
+    ///
+    /// This no longer affects how audio is rendered: the pan is the same on
+    /// every output. It survives because the receiver override depends on
+    /// knowing when nothing external is attached.
     nonisolated static func outputProfile(forPortTypes portTypes: [AVAudioSession.Port]) -> OutputProfile {
-        // An empty route means the session isn't active yet. Assume the speaker:
-        // guessing headphones here applies HRTF to speaker playback, which
-        // sounds thin and off-centre for players who never plug anything in.
+        // An empty route means the session isn't active yet; assume the speaker.
         guard !portTypes.isEmpty else { return .builtInSpeaker }
         let personalAudioPorts: Set<AVAudioSession.Port> = [
             .headphones,
@@ -982,8 +975,8 @@ final class GameAudioEngine: @unchecked Sendable {
     /// out of the speaker.
     ///
     /// `.default` keeps speaker output correct and costs nothing audible: the
-    /// spatial work is done by AVAudioEnvironmentNode (HRTF for headphones,
-    /// equal-power panning for the speaker), not by the session mode.
+    /// left/right placement is a plain stereo pan on each player node, not
+    /// anything the session mode influences.
     nonisolated static func audioSessionMode(for profile: OutputProfile) -> AVAudioSession.Mode {
         _ = profile
         return .default
@@ -993,76 +986,27 @@ final class GameAudioEngine: @unchecked Sendable {
         Self.audioSessionMode(for: profile)
     }
 
-    private func configureSpatialEnvironment(_ environment: AVAudioEnvironmentNode, for profile: OutputProfile) {
-        environment.outputType = profile == .personalAudio ? .headphones : .builtInSpeakers
-        environment.listenerPosition = AVAudio3DPoint(x: 0, y: 0, z: 0)
-        environment.listenerAngularOrientation = AVAudio3DAngularOrientation(yaw: 0, pitch: 0, roll: 0)
-        environment.distanceAttenuationParameters.distanceAttenuationModel = .linear
-        environment.distanceAttenuationParameters.referenceDistance = 1
-        environment.distanceAttenuationParameters.maximumDistance = 30
-        environment.distanceAttenuationParameters.rolloffFactor = 0
-    }
-
-    private func configureRendering(for voice: SpatialVoice, profile: OutputProfile) {
-        let algorithm: AVAudio3DMixingRenderingAlgorithm = profile == .personalAudio ? .HRTFHQ : .equalPowerPanning
-        voice.dryPlayer.sourceMode = .spatializeIfMono
-        voice.dryPlayer.renderingAlgorithm = algorithm
-        voice.wetPlayer.sourceMode = .spatializeIfMono
-        voice.wetPlayer.renderingAlgorithm = algorithm
-    }
-
-    private func spatialPosition(x: Double, proximity: Double) -> AVAudio3DPoint {
-        Self.spatialPosition(x: clamp(x), proximity: clamp(proximity), profile: outputProfile)
-    }
-
-    /// Widest angle, in degrees, that a source is placed off the centre line.
-    /// At the side walls the puck sits this far to one side; the player should
-    /// hear it essentially in one ear without it leaving the sound stage.
-    nonisolated static let maximumPanAngleDegrees: Double = 80
-
-    /// Places a sound on an arc around the listener.
+    /// Maps table position straight onto the stereo field.
     ///
-    /// The listener sits at the centre of a circle and sources are placed at a
-    /// fixed radius, with the angle proportional to the puck's position across
-    /// the table. This is the whole point: perceived direction tracks table
-    /// position *linearly*, so dragging the puck slowly from wall to wall pans
-    /// smoothly and evenly the entire way.
+    /// `x` is 0 at the left wall and 1 at the right wall; the result is the
+    /// player node's pan, -1 (hard left) to +1 (hard right). The mapping is
+    /// deliberately the plain linear one, so equal steps across the table are
+    /// equal steps across the stereo field the whole way out.
     ///
-    /// Do not go back to placing sources on a wide, shallow rectangle (a large
-    /// x with a small z). That geometry seems to give a wide field, but the
-    /// perceived angle is the arctangent of x over z, which saturates: with a
-    /// spread of 12 and a depth under 1, everything past about a third of the
-    /// way out is pinned at 80-plus degrees and indistinguishable, while the
-    /// entire audible sweep is crammed into a narrow band around the centre
-    /// line. That produces exactly the fault this arc fixes — the puck sticks
-    /// in one ear across most of the table, then flips hard as it crosses the
-    /// middle. Distance belongs in `radius` only; it must never bend the angle.
+    /// This game does not want spatial audio. Left/right is the gameplay
+    /// signal, and everything else — how far the puck is, how fast it is
+    /// closing — is already carried by pulse timing, pitch, and volume. Do not
+    /// reintroduce `AVAudioEnvironmentNode`, HRTF, or any 3D placement here.
+    /// HRTF renders a generic head, and a head deliberately bleeds sound into
+    /// the far ear, which caps the usable width no matter how far out a source
+    /// is placed. That is what made the field read as narrow on AirPods, which
+    /// reproduce the head model faithfully, while bone-conduction sets that
+    /// destroy those cues sounded acceptable. A pan has no head model, so a
+    /// puck at a wall is simply in that ear.
     ///
-    /// `profile` is optional because the engine has not classified the route
-    /// until the session activates. A nil profile takes the personal-audio path
-    /// so the opening cues of a match are not rendered narrow.
-    nonisolated static func spatialPosition(x: Double, proximity: Double, profile: OutputProfile?) -> AVAudio3DPoint {
-        let normalized = min(max(x, 0), 1) * 2 - 1
-        // The speaker has no usable stereo field, so equal-power panning across
-        // a unit width is all that is meaningful there.
-        if profile == .builtInSpeaker {
-            return AVAudio3DPoint(x: Float(normalized), y: 0, z: -1)
-        }
-        let near = min(max(proximity, 0), 1)
-        // Distance changes only how far away the puck sounds, never its
-        // direction. Near pucks sit closer and read louder and more present.
-        let radius = 1.6 + (1 - near) * 4.4
-        let angle = normalized * maximumPanAngleDegrees * .pi / 180
-        return AVAudio3DPoint(
-            x: Float(radius * sin(angle)),
-            y: 0,
-            z: Float(-radius * cos(angle))
-        )
-    }
-
-    private func spatialEdgeGain(x: Double) -> Double {
-        let edgeAmount = abs(clamp(x) - 0.5) * 2
-        return 1.0 + 0.34 * edgeAmount
+    /// Distance must never touch the pan: it is not directional information.
+    nonisolated static func stereoPan(for x: Double) -> Float {
+        Float(min(max(x, 0), 1) * 2 - 1)
     }
 
     private func renderMalletSlideLoop() -> AVAudioPCMBuffer {
