@@ -1015,32 +1015,49 @@ final class GameAudioEngine: @unchecked Sendable {
         Self.spatialPosition(x: clamp(x), proximity: clamp(proximity), profile: outputProfile)
     }
 
-    /// Places a sound in the 3D field. Separated from the live engine so the
-    /// stereo width can be asserted directly — narrowing it has regressed
-    /// twice, and it is the single most important cue in the game.
+    /// Widest angle, in degrees, that a source is placed off the centre line.
+    /// At the side walls the puck sits this far to one side; the player should
+    /// hear it essentially in one ear without it leaving the sound stage.
+    nonisolated static let maximumPanAngleDegrees: Double = 80
+
+    /// Places a sound on an arc around the listener.
     ///
-    /// The horizontal spread is deliberately constant and very wide. It must
-    /// not narrow as the puck approaches: a puck against the near-left wall is
-    /// the most extreme left cue in the game, and shrinking the spread with
-    /// proximity pulls exactly that cue back toward centre. A 1.0.x build did
-    /// this (`6.2 - 1.6 * near²`) to tame fast close-range pulses and collapsed
-    /// the whole stereo field on headphones as a result. Fix pulse density in
-    /// the timing code, never by narrowing the field.
+    /// The listener sits at the centre of a circle and sources are placed at a
+    /// fixed radius, with the angle proportional to the puck's position across
+    /// the table. This is the whole point: perceived direction tracks table
+    /// position *linearly*, so dragging the puck slowly from wall to wall pans
+    /// smoothly and evenly the entire way.
+    ///
+    /// Do not go back to placing sources on a wide, shallow rectangle (a large
+    /// x with a small z). That geometry seems to give a wide field, but the
+    /// perceived angle is the arctangent of x over z, which saturates: with a
+    /// spread of 12 and a depth under 1, everything past about a third of the
+    /// way out is pinned at 80-plus degrees and indistinguishable, while the
+    /// entire audible sweep is crammed into a narrow band around the centre
+    /// line. That produces exactly the fault this arc fixes — the puck sticks
+    /// in one ear across most of the table, then flips hard as it crosses the
+    /// middle. Distance belongs in `radius` only; it must never bend the angle.
+    ///
     /// `profile` is optional because the engine has not classified the route
-    /// until the session activates. A nil profile takes the wide path, matching
-    /// the original behaviour: the narrow placement is reserved for a route
-    /// positively identified as the built-in speaker.
+    /// until the session activates. A nil profile takes the personal-audio path
+    /// so the opening cues of a match are not rendered narrow.
     nonisolated static func spatialPosition(x: Double, proximity: Double, profile: OutputProfile?) -> AVAudio3DPoint {
         let normalized = min(max(x, 0), 1) * 2 - 1
-        // The speaker has no stereo field to speak of, so equal-power panning
-        // across a unit width is all that is meaningful there.
+        // The speaker has no usable stereo field, so equal-power panning across
+        // a unit width is all that is meaningful there.
         if profile == .builtInSpeaker {
             return AVAudio3DPoint(x: Float(normalized), y: 0, z: -1)
         }
         let near = min(max(proximity, 0), 1)
-        let horizontal = Float(normalized * 12.0)
-        let depth = Float(-(0.35 + (1 - near) * 6.0))
-        return AVAudio3DPoint(x: horizontal, y: 0, z: depth)
+        // Distance changes only how far away the puck sounds, never its
+        // direction. Near pucks sit closer and read louder and more present.
+        let radius = 1.6 + (1 - near) * 4.4
+        let angle = normalized * maximumPanAngleDegrees * .pi / 180
+        return AVAudio3DPoint(
+            x: Float(radius * sin(angle)),
+            y: 0,
+            z: Float(-radius * cos(angle))
+        )
     }
 
     private func spatialEdgeGain(x: Double) -> Double {

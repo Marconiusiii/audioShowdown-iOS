@@ -112,74 +112,142 @@ final class AudioRoutingTests: XCTestCase {
         Double(atan2(abs(point.x), abs(point.z))) * 180 / .pi
     }
 
+    /// Signed angle off the centre line: negative is left, positive is right.
+    /// Direction matters here, so these assertions use the signed value.
+    private func signedAngle(_ point: AVAudio3DPoint) -> Double {
+        Double(atan2(Double(point.x), abs(Double(point.z)))) * 180 / .pi
+    }
+
     private func headphonePosition(x: Double, proximity: Double) -> AVAudio3DPoint {
         GameAudioEngine.spatialPosition(x: x, proximity: proximity, profile: .personalAudio)
     }
 
-    /// The core regression. A puck against a side wall must be hard against
-    /// that ear at every distance. A 1.0.x build scaled the spread down by
-    /// `1.6 * near²`, which pulled the near walls — the most extreme cue in
-    /// the game — back toward centre and flattened the field on headphones.
-    func testSideWallsStayHardLeftAndRightAtEveryDistance() {
+    /// A puck against a side wall must reach the full pan angle at every
+    /// distance. A 1.0.x build scaled the spread down by `1.6 * near²`, which
+    /// pulled the near walls — the most extreme cue in the game — back toward
+    /// centre and flattened the field on headphones.
+    func testSideWallsReachFullPanAtEveryDistance() {
+        let full = GameAudioEngine.maximumPanAngleDegrees
         for proximity in stride(from: 0.0, through: 1.0, by: 0.05) {
             let left = headphonePosition(x: 0, proximity: proximity)
             let right = headphonePosition(x: 1, proximity: proximity)
 
-            XCTAssertGreaterThan(
-                offCentreDegrees(left), 60,
-                "left wall collapsed toward centre at proximity \(proximity)"
+            XCTAssertEqual(
+                offCentreDegrees(left), full, accuracy: 0.01,
+                "left wall fell short of full pan at proximity \(proximity)"
             )
-            XCTAssertGreaterThan(
-                offCentreDegrees(right), 60,
-                "right wall collapsed toward centre at proximity \(proximity)"
+            XCTAssertEqual(
+                offCentreDegrees(right), full, accuracy: 0.01,
+                "right wall fell short of full pan at proximity \(proximity)"
             )
             XCTAssertLessThan(left.x, 0, "left wall must sit in the left ear")
             XCTAssertGreaterThan(right.x, 0, "right wall must sit in the right ear")
         }
     }
 
-    /// The horizontal placement of a side wall must never shrink as the puck
-    /// approaches. This is the precise failure in the compression commit: the
-    /// spread was scaled down by `1.6 * near²`, so the near walls were placed
-    /// least far out. Note this asserts the raw horizontal value, not the
-    /// perceived angle — the broken maths still *widened* in angle, because its
-    /// depth term shrank faster than its width term, which is exactly why the
-    /// bug was easy to miss.
-    func testHorizontalPlacementNeverShrinksAsThePuckApproaches() {
-        var previous = abs(headphonePosition(x: 0, proximity: 0).x)
-        for proximity in stride(from: 0.05, through: 1.0, by: 0.05) {
-            let current = abs(headphonePosition(x: 0, proximity: proximity).x)
-            XCTAssertGreaterThanOrEqual(
-                current, previous,
-                "horizontal spread shrank as the puck approached, at proximity \(proximity)"
+    /// The pan must be *linear* across the table: equal steps in table position
+    /// produce equal steps in perceived angle. This is the property that makes
+    /// slowly dragging the puck read as a smooth sweep.
+    ///
+    /// A wide, shallow rectangular placement fails this badly — the angle is
+    /// the arctangent of x over z, so it saturates near the walls and crams the
+    /// whole audible sweep around the centre line.
+    func testPanIsLinearAcrossTheTable() {
+        let step = 0.05
+        var previousAngle = signedAngle(headphonePosition(x: 0, proximity: 0.9))
+        var deltas: [Double] = []
+
+        for x in stride(from: step, through: 1.0, by: step) {
+            let angle = signedAngle(headphonePosition(x: x, proximity: 0.9))
+            deltas.append(angle - previousAngle)
+            previousAngle = angle
+        }
+
+        let expected = 2 * GameAudioEngine.maximumPanAngleDegrees * step
+        for delta in deltas {
+            XCTAssertEqual(
+                delta, expected, accuracy: 0.01,
+                "pan is uneven across the table; every step must sweep the same angle"
             )
-            previous = current
         }
     }
 
-    /// Horizontal placement must depend only on x, so the same wall reads at
-    /// the same width whether the puck is near or far.
-    func testHorizontalPlacementIsIndependentOfDistance() {
+    /// No stretch of the table may be a dead zone where the puck barely moves
+    /// in the mix, and no stretch may swing wildly. Both are the same fault
+    /// seen from opposite ends, and both were present before the arc placement.
+    func testNoDeadZonesOrViolentSwings() {
+        let step = 0.05
+        let expected = 2 * GameAudioEngine.maximumPanAngleDegrees * step
+        var previousAngle = signedAngle(headphonePosition(x: 0, proximity: 0.9))
+
+        for x in stride(from: step, through: 1.0, by: step) {
+            let angle = signedAngle(headphonePosition(x: x, proximity: 0.9))
+            let delta = abs(angle - previousAngle)
+            XCTAssertGreaterThan(
+                delta, expected * 0.5,
+                "dead zone near x=\(x): the puck barely moves in the mix here"
+            )
+            XCTAssertLessThan(
+                delta, expected * 2,
+                "violent swing near x=\(x): the puck lurches between ears here"
+            )
+            previousAngle = angle
+        }
+    }
+
+    /// Crossing the centre line must be as gentle as any other step. The old
+    /// rectangular placement flipped through roughly 100 degrees inside a tenth
+    /// of the table width right at the middle.
+    func testCrossingTheCentreLineIsGentle() {
+        let justLeft = signedAngle(headphonePosition(x: 0.45, proximity: 0.9))
+        let justRight = signedAngle(headphonePosition(x: 0.55, proximity: 0.9))
+        XCTAssertLessThan(
+            abs(justRight - justLeft), 30,
+            "the mix lurches from ear to ear when the puck crosses the centre"
+        )
+    }
+
+    /// Distance may change how far away the puck sounds, but never which
+    /// direction it comes from.
+    func testDistanceDoesNotChangeDirection() {
         for x in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let near = signedAngle(headphonePosition(x: x, proximity: 1))
+            let far = signedAngle(headphonePosition(x: x, proximity: 0))
+            XCTAssertEqual(
+                near, far, accuracy: 0.01,
+                "x=\(x) changed direction with distance"
+            )
+        }
+    }
+
+    /// A near puck must sit closer to the listener than a far one, so distance
+    /// still reads even though it no longer bends the angle.
+    func testNearPucksAreCloserThanFarPucks() {
+        for x in [0.0, 0.5, 1.0] {
             let near = headphonePosition(x: x, proximity: 1)
             let far = headphonePosition(x: x, proximity: 0)
-            XCTAssertEqual(
-                near.x, far.x, accuracy: 0.0001,
-                "x=\(x) shifted horizontally with distance"
+            let nearRadius = hypot(Double(near.x), Double(near.z))
+            let farRadius = hypot(Double(far.x), Double(far.z))
+            XCTAssertLessThan(
+                nearRadius, farRadius,
+                "a near puck at x=\(x) must sound closer than a far one"
             )
         }
     }
 
-    /// Only a puck actually at the centre line belongs in the centre. Anything
-    /// off-centre must be audibly off-centre.
+    /// Only a puck actually at the centre line belongs in the centre, and the
+    /// centre must be a line rather than a wide band — a puck a tenth of the
+    /// table off-centre should already be audibly off-centre.
     func testOnlyTheCentreLineRendersCentred() {
         XCTAssertEqual(headphonePosition(x: 0.5, proximity: 0.5).x, 0, accuracy: 0.0001)
 
         for x in [0.35, 0.4, 0.45, 0.55, 0.6, 0.65] {
-            let point = headphonePosition(x: x, proximity: 0.5)
-            XCTAssertGreaterThan(
-                abs(point.x), 0.5,
-                "x=\(x) rendered too close to centre"
+            let offset = abs(x - 0.5)
+            let expected = 2 * offset * GameAudioEngine.maximumPanAngleDegrees
+            XCTAssertEqual(
+                offCentreDegrees(headphonePosition(x: x, proximity: 0.5)),
+                expected, accuracy: 0.01,
+                "x=\(x) did not pan proportionally to its distance from centre"
             )
         }
     }
@@ -210,9 +278,9 @@ final class AudioRoutingTests: XCTestCase {
     }
 
     /// Before the session activates the engine has not classified the route
-    /// yet. That must take the wide path — narrowing an unknown route would
-    /// squash the field on headphones for the first cues of a match.
-    func testUnclassifiedRouteUsesTheWideField() {
+    /// yet. That must take the personal-audio arc — using the speaker's narrow
+    /// placement would squash the opening cues of a match on headphones.
+    func testUnclassifiedRouteUsesThePersonalAudioArc() {
         let unknown = GameAudioEngine.spatialPosition(x: 0, proximity: 1, profile: nil)
         let headphones = headphonePosition(x: 0, proximity: 1)
         XCTAssertEqual(unknown.x, headphones.x, accuracy: 0.0001)
