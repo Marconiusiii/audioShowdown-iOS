@@ -381,12 +381,12 @@ final class GameModel: ObservableObject {
         } else if phase == .live {
             resolvePlayerDirectContact()
         }
+        // Always report the speed, even when it is zero. The audio engine ramps
+        // its own gain from movement, so stopping the finger tapers the slide
+        // off instead of cutting it dead — and a tap, which is zero movement,
+        // stays silent.
         let movementSpeed = hypot(playerMallet.vx, playerMallet.vy)
-        if movementSpeed > 60 {
-            audio.updateMalletSlide(x: next.x / Self.width, speed: movementSpeed, volume: settings.malletSlideVolume)
-        } else {
-            audio.stopMalletSlide()
-        }
+        audio.updateMalletSlide(x: next.x / Self.width, speed: movementSpeed, volume: settings.malletSlideVolume)
     }
 
     private func moveOpponent(realDt: Double, timeScale: Double) {

@@ -235,8 +235,6 @@ struct SettingsView: View {
                             theme: theme
                         )
 
-                        AudioDiagnosticsView(theme: theme, audioEngine: audioEngine)
-
                         AboutAudioShowdownView(theme: theme)
                     }
                     .frame(width: geometry.size.width)

@@ -126,8 +126,11 @@ final class GameAudioEngine: @unchecked Sendable {
     private var started = false
     private var reverbStyle = -1
     private var puckVolume = 0.8
-    private var warmedUp = false
     private var malletSlideStyle = -1
+    /// Smoothed toward their targets each frame so the slide does not flicker
+    /// with every twitch of the drag. Negative gain means "not yet started".
+    private var malletSlideSmoothedGain: Float = 0
+    private var malletSlideSmoothedPan: Float = .infinity
     private var smoothPuckStyle = -1
     private var smoothPuckGeneration = 0
     private var smoothPuckDryQueuedBuffers = 0
@@ -163,7 +166,7 @@ final class GameAudioEngine: @unchecked Sendable {
         wetMixer.outputVolume = 0
         configureMalletSlide()
         configure(voice: smoothPuckVoice)
-        puckVoices = makeTrackingVoices(count: 10)
+        puckVoices = makeVoices(count: 10)
         effectVoices = makeVoices(count: 16)
         refreshOutputProfile(force: true)
         routeChangeObserver = NotificationCenter.default.addObserver(
@@ -224,105 +227,32 @@ final class GameAudioEngine: @unchecked Sendable {
         }
     }
 
-    func warmUp(volume: Double, reverbStyle: Int, puckVolume: Double) {
-        prepare(volume: volume)
-        setReverb(reverbStyle)
-        setPuckVolume(puckVolume)
-        guard !warmedUp else { return }
-        warmedUp = true
-        let silence = render(tones: [], noises: [], gain: 0)
-        playEffect(silence, x: 0.5, proximity: 0.5)
-    }
-
     func setVolume(_ volume: Double) {
         engine.mainMixerNode.outputVolume = Float(volume)
     }
 
-    /// Reports what the audio stack is actually doing on the current device and
-    /// route. The simulator cannot produce an AirPods route, so this is the only
-    /// way to see the real values rather than guessing at them.
-    ///
-    /// `pan` is what the engine would apply to a puck at the left wall: -1 means
-    /// full left. If that reads -1 while the sound is still centred, the
-    /// narrowing is happening after the engine, not inside it.
-    func routeDiagnostics() -> String {
-        // Start the engine first. Nothing configures the session until a sound
-        // actually plays, so reading the route cold reports iOS's default
-        // SoloAmbient session rather than the game's — which is what made the
-        // first diagnostic misleading.
-        _ = ensureEngineRunning()
-        let session = AVAudioSession.sharedInstance()
-        let route = session.currentRoute
-        let outputs = route.outputs
-        let ports = outputs.map { "\($0.portType.rawValue)(\($0.portName))" }.joined(separator: ", ")
-        let spatial = outputs.map { output -> String in
-            if #available(iOS 15.0, *) {
-                return output.isSpatialAudioEnabled ? "spatialON" : "spatialOFF"
-            }
-            return "spatialUnknown"
-        }.joined(separator: ", ")
-        // The verdict first: HFP is a mono transport, so on that route iOS sums
-        // the channels and no pan can reach one ear. A2DP is true stereo.
-        let isHFP = outputs.contains { $0.portType == .bluetoothHFP }
-        let channels = session.outputNumberOfChannels
-        let verdict: String
-        if isHFP {
-            verdict = "PROBLEM: HFP route — mono transport, stereo cannot work"
-        } else if channels < 2 {
-            verdict = "PROBLEM: route reports \(channels) channel(s), not stereo"
-        } else {
-            verdict = "OK: stereo route"
-        }
-        let leftWallPan = Self.stereoPan(for: 0, profile: outputProfile)
-        let profileName: String
-        switch outputProfile {
-        case .some(.personalAudio): profileName = "personalAudio"
-        case .some(.builtInSpeaker): profileName = "builtInSpeaker"
-        case nil: profileName = "unclassified"
-        }
-        return """
-        \(verdict)
-        route: \(ports.isEmpty ? "none" : ports)
-        spatial: \(spatial.isEmpty ? "n/a" : spatial)
-        profile: \(profileName)
-        leftWallPan: \(leftWallPan)
-        outputChannels: \(session.outputNumberOfChannels) (max \(session.maximumOutputNumberOfChannels))
-        category: \(session.category.rawValue) mode: \(session.mode.rawValue)
-        options: \(session.categoryOptions.rawValue)
-        engineRunning: \(engine.isRunning)
-        mainMixerFormat: \(engine.mainMixerNode.outputFormat(forBus: 0))
-        outputNodeFormat: \(engine.outputNode.outputFormat(forBus: 0))
-        """
-    }
+    // MARK: - Test hooks
+    //
+    // The audio path cannot be verified any other way: the values that decide
+    // what each ear receives are only observable by rendering the real graph.
 
-    /// Whether the underlying engine is actually running. Exposed so tests can
-    /// start the real graph and catch a wiring fault that pure-function tests
-    /// cannot see.
-    var isRunningForTesting: Bool { engine.isRunning }
-
-    /// The live engine, so tests can render the real graph offline and measure
-    /// what each channel actually receives. Asserting on the pan value we hand
-    /// the players is what let a narrow field ship repeatedly.
+    /// The live engine, so tests can render offline and measure each channel.
     var engineForTesting: AVAudioEngine { engine }
+
+    /// Whether the engine actually started.
+    var isRunningForTesting: Bool { engine.isRunning }
 
     /// The binaural-tagged mix format, so tests can assert the tag survives.
     var mixFormatForTesting: AVAudioFormat { mixFormat }
 
-    /// Mallet slide playback state, so tests can prove the loop keeps running
-    /// while its balance follows the paddle.
-    /// Counts how many times the slide loop has been (re)scheduled. A sweep
-    /// across the table must not increase it: re-scheduling restarts the loop
-    /// from frame zero, which is what made the slide grate.
-    private(set) var malletSlideScheduleCountForTesting = 0
-    var malletSlideIsPlayingForTesting: Bool { malletSlideLeft.isPlaying && malletSlideRight.isPlaying }
-    var malletSlideVolumesForTesting: (Float, Float) { (malletSlideLeft.volume, malletSlideRight.volume) }
-
-    /// The rendered slide loop, so tests can inspect its seams directly.
+    /// Mallet slide state: the rendered loop, its per-side volumes, and how
+    /// many times the loop has been scheduled (a sweep must not increase it).
     func malletSlideLoopForTesting() -> AVAudioPCMBuffer { renderMalletSlideLoop() }
+    var malletSlideVolumesForTesting: (Float, Float) { (malletSlideLeft.volume, malletSlideRight.volume) }
+    private(set) var malletSlideScheduleCountForTesting = 0
 
-    /// Pins the output profile so tests can measure a specific route's pan.
-    /// The simulator reports the built-in speaker, which would otherwise make
-    /// every measurement the speaker path.
+    /// Pins the output profile. The simulator always reports the built-in
+    /// speaker, which would otherwise make every measurement the speaker path.
     func forceOutputProfileForTesting(_ profile: OutputProfile) {
         forcedOutputProfile = profile
         outputProfile = profile
@@ -627,7 +557,15 @@ final class GameAudioEngine: @unchecked Sendable {
     }
 
     func updateMalletSlide(x: Double, speed: Double, volume: Double) {
-        guard speed > 0, volume > 0 else {
+        guard volume > 0 else {
+            stopMalletSlide()
+            return
+        }
+        // A speed of zero is not a reason to stop: it is the target the gain
+        // ramps down to, which is what makes the slide taper off when the
+        // finger stops rather than cutting out. Once it has faded to silence
+        // the players are stopped so nothing runs needlessly.
+        if speed <= 0, malletSlideSmoothedGain < 0.0005 {
             stopMalletSlide()
             return
         }
@@ -635,7 +573,10 @@ final class GameAudioEngine: @unchecked Sendable {
             stopMalletSlide()
             return
         }
-        let compensatedGain = Float((0.025 + 0.30 * clamp(speed / 1_400)) * clamp(volume))
+        // Movement alone drives the level: no floor term, so a stationary or
+        // barely-moving finger is silent. A tap is movement of zero and must
+        // make no sound at all.
+        let compensatedGain = Float(0.34 * clamp(speed / 1_400) * clamp(volume))
         let pan = Self.stereoPan(for: x, profile: outputProfile)
 
         // The slide is a continuous loop, so its pan must NEVER be baked into
@@ -649,21 +590,44 @@ final class GameAudioEngine: @unchecked Sendable {
         // unbroken while the mallet moves.
         if malletSlideStyle != 1 || !malletSlideLeft.isPlaying || !malletSlideRight.isPlaying {
             malletSlideStyle = 1
-            let loop = renderMalletSlideLoop()
+            // Each side gets its OWN noise render. Feeding both players the
+            // same buffer put identical noise in both ears, which fuses into
+            // one wide blast spread across the whole field instead of a point
+            // that follows the finger. Decorrelated noise localises properly.
             malletSlideScheduleCountForTesting += 1
             for (player, side) in [(malletSlideLeft, 0), (malletSlideRight, 1)] {
                 player.stop()
-                player.scheduleBuffer(singleChannel(loop, side: side), at: nil, options: .loops)
+                player.scheduleBuffer(singleChannel(renderMalletSlideLoop(), side: side), at: nil, options: .loops)
                 player.play()
             }
         }
 
+        // Smooth the gain and the pan toward their targets rather than jumping
+        // to them. Both are driven by finger position and speed sampled every
+        // frame, so applying them raw makes the slide flicker and lurch with
+        // every twitch of the drag. The smoothing is fast enough to still feel
+        // attached to the finger, slow enough to stop frame-to-frame jitter.
+        // The gain always ramps up from silence and never snaps to its target.
+        // Snapping on the first frame is what made a finger-down tap blast the
+        // noise at full level before any movement had happened.
+        //
+        // Rising is slower than falling so a drag swells in rather than
+        // cracking on, while stopping tapers off promptly instead of hanging.
+        if malletSlideSmoothedPan == .infinity {
+            malletSlideSmoothedPan = pan
+        } else {
+            malletSlideSmoothedPan += (pan - malletSlideSmoothedPan) * 0.35
+        }
+        let rising = compensatedGain > malletSlideSmoothedGain
+        malletSlideSmoothedGain += (compensatedGain - malletSlideSmoothedGain) * (rising ? 0.18 : 0.30)
+
         // Same linear crossfade law as `panned(_:pan:)`: the near side holds at
         // unity and the far side falls linearly to zero at the wall.
-        let leftGain = pan <= 0 ? 1 : 1 - pan
-        let rightGain = pan >= 0 ? 1 : 1 + pan
-        malletSlideLeft.volume = compensatedGain * leftGain
-        malletSlideRight.volume = compensatedGain * rightGain
+        let smoothedPan = malletSlideSmoothedPan
+        let leftGain = smoothedPan <= 0 ? 1 : 1 - smoothedPan
+        let rightGain = smoothedPan >= 0 ? 1 : 1 + smoothedPan
+        malletSlideLeft.volume = malletSlideSmoothedGain * leftGain
+        malletSlideRight.volume = malletSlideSmoothedGain * rightGain
     }
 
     func stopMalletSlide() {
@@ -672,6 +636,8 @@ final class GameAudioEngine: @unchecked Sendable {
             if player.isPlaying { player.stop() }
         }
         malletSlideStyle = -1
+        malletSlideSmoothedGain = 0
+        malletSlideSmoothedPan = .infinity
     }
 
     func ricochet(x: Double, speed: Double) {
@@ -910,14 +876,6 @@ final class GameAudioEngine: @unchecked Sendable {
         }
     }
 
-    private func makeTrackingVoices(count: Int) -> [SpatialVoice] {
-        (0..<count).map { _ in
-            let voice = SpatialVoice()
-            configure(voice: voice)
-            return voice
-        }
-    }
-
     /// Wires a voice as a stereo source.
     ///
     /// The players are fed *stereo* buffers with the left/right split already
@@ -1111,7 +1069,6 @@ final class GameAudioEngine: @unchecked Sendable {
         stopContinuousAudioForInterruption()
         engine.stop()
         started = false
-        warmedUp = false
         outputProfile = nil
     }
 
@@ -1266,41 +1223,23 @@ final class GameAudioEngine: @unchecked Sendable {
         profile == .builtInSpeaker ? 0.7 : 1.0
     }
 
-    /// Renders the paddle-slide loop: a continuous, seamless friction texture.
+    /// Renders the paddle-slide loop.
     ///
-    /// Three things matter here, all of them audible now that the sound is no
-    /// longer smeared by the spatialiser.
-    ///
-    /// **It must loop seamlessly.** The previous version faded to silence at
-    /// both ends of the buffer, which with `.loops` meant a dip to nothing
-    /// every two seconds — heard as a stutter in a sound that should be
-    /// unbroken. Instead the tail is crossfaded back over the head, so the
-    /// join is continuous and no fade is needed.
-    ///
-    /// **The noise must be shaped, not raw.** A single one-pole low-pass over
-    /// white noise is essentially hiss. Two cascaded poles plus a gentle
-    /// high-pass give a band-limited rumble that reads as a surface rather
-    /// than static.
-    ///
-    /// **The grain must not be periodic.** Any fixed-frequency component
-    /// repeats at an audible rate and turns into a buzz, so the texture comes
-    /// from slow random modulation of the noise level instead of oscillators.
+    /// This is the original synthesis and must stay that way — it is the sound
+    /// the game is tuned around. The only change from the first version is the
+    /// loop seam: it used to fade to silence at both ends of the buffer, which
+    /// with `.loops` dipped to nothing every two seconds. The tail is now
+    /// crossfaded back over the head instead, so the join is continuous and the
+    /// timbre is untouched.
     private func renderMalletSlideLoop() -> AVAudioPCMBuffer {
         let sampleRate = sourceFormat.sampleRate
         let duration = 2.0
-        // Rendered long, then the tail is folded back over the head, so the
-        // usable loop is shorter than what is synthesised.
-        let crossfade = 0.25
-        let crossfadeFrames = Int(crossfade * sampleRate)
+        let crossfadeFrames = Int(0.05 * sampleRate)
         let loopFrames = Int(duration * sampleRate)
         let renderFrames = loopFrames + crossfadeFrames
 
         var scratch = [Double](repeating: 0, count: renderFrames)
-        var low1 = 0.0
-        var low2 = 0.0
-        var highState = 0.0
-        var envelope = 0.5
-        var envelopeTarget = 0.5
+        var lowState = 0.0
 
         func lowPass(_ value: Double, cutoff: Double, state: inout Double) -> Double {
             let alpha = 1 - exp(-2 * Double.pi * cutoff / sampleRate)
@@ -1309,22 +1248,12 @@ final class GameAudioEngine: @unchecked Sendable {
         }
 
         for frame in 0..<renderFrames {
-            // Slow, irregular level drift: this is what makes it read as a
-            // paddle dragging over a surface rather than flat noise.
-            if frame % Int(sampleRate * 0.03) == 0 {
-                envelopeTarget = Double.random(in: 0.55...1.0)
-            }
-            envelope += (envelopeTarget - envelope) * 0.0025
-
+            let t = Double(frame) / sampleRate
             let noise = Double.random(in: -1...1)
-            // Two cascaded poles: a steeper skirt than one, so the result is a
-            // rounded rumble instead of hiss.
-            let body = lowPass(lowPass(noise, cutoff: 1_150, state: &low1), cutoff: 780, state: &low2)
-            // Remove the sub-rumble that would otherwise sound like handling
-            // noise rather than friction.
-            highState += (body - highState) * (1 - exp(-2 * Double.pi * 90 / sampleRate))
-            let friction = body - highState
-            scratch[frame] = friction * envelope
+            let grain = lowPass(noise, cutoff: 850, state: &lowState)
+            let chatter = abs(sin(2 * Double.pi * 37 * t)) * 2 - 1
+            let value = grain * 0.28 + chatter * 0.045 + sin(2 * Double.pi * 118 * t) * 0.045 + sin(2 * Double.pi * 236 * t) * 0.018
+            scratch[frame] = tanh(value)
         }
 
         // Fold the tail back over the head so the loop point is seamless.
@@ -1336,11 +1265,8 @@ final class GameAudioEngine: @unchecked Sendable {
         let buffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(loopFrames))!
         buffer.frameLength = AVAudioFrameCount(loopFrames)
         let samples = buffer.floatChannelData![0]
-        // Normalise so the caller's gain is the only thing setting the level.
-        let peak = scratch[0..<loopFrames].reduce(0.0) { max($0, abs($1)) }
-        let scale = peak > 0 ? 0.92 / peak : 0
         for frame in 0..<loopFrames {
-            samples[frame] = Float(scratch[frame] * scale)
+            samples[frame] = Float(scratch[frame])
         }
         return buffer
     }
