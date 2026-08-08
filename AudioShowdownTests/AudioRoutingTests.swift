@@ -119,14 +119,53 @@ final class AudioRoutingTests: XCTestCase {
     // — while bone-conduction sets that destroy those cues sounded fine.
 
     private func pan(_ x: Double) -> Double {
-        Double(GameAudioEngine.stereoPan(for: x))
+        Double(GameAudioEngine.stereoPan(for: x, profile: .personalAudio))
     }
 
-    /// The walls must be hard left and hard right. Anything less is the
-    /// narrowness this replaced the spatialiser to fix.
+    private func speakerPan(_ x: Double) -> Double {
+        Double(GameAudioEngine.stereoPan(for: x, profile: .builtInSpeaker))
+    }
+
+    /// On headphones the walls must be hard left and hard right. Anything less
+    /// is the narrowness this replaced the spatialiser to fix.
     func testSideWallsAreHardLeftAndHardRight() {
         XCTAssertEqual(pan(0), -1, accuracy: 0.0001, "left wall must be hard left")
         XCTAssertEqual(pan(1), 1, accuracy: 0.0001, "right wall must be hard right")
+    }
+
+    /// The built-in speaker must never be panned to a hard edge. The phone's
+    /// speakers sit at opposite ends of the device, so a hard-panned sound
+    /// comes out of exactly one of them — and the hand holding the phone
+    /// covers it. Every table position has to keep signal in both speakers.
+    func testSpeakerNeverPansToAHardEdge() {
+        for x in stride(from: 0.0, through: 1.0, by: 0.05) {
+            XCTAssertLessThan(
+                abs(speakerPan(x)), 0.95,
+                "x=\(x) is panned too hard for the built-in speaker"
+            )
+        }
+    }
+
+    /// The speaker still has to convey direction, just not to the edges.
+    func testSpeakerStillPansDirectionally() {
+        XCTAssertLessThan(speakerPan(0), -0.5, "left wall must still read as left")
+        XCTAssertGreaterThan(speakerPan(1), 0.5, "right wall must still read as right")
+        XCTAssertEqual(speakerPan(0.5), 0, accuracy: 0.0001)
+    }
+
+    /// The speaker limit must not leak into headphone playback.
+    func testSpeakerLimitDoesNotNarrowHeadphones() {
+        XCTAssertGreaterThan(abs(pan(0)), abs(speakerPan(0)))
+        XCTAssertGreaterThan(abs(pan(1)), abs(speakerPan(1)))
+    }
+
+    /// An unclassified route must take the full-width path, so the opening
+    /// cues of a match are not rendered narrow on headphones.
+    func testUnclassifiedRouteUsesFullWidth() {
+        XCTAssertEqual(
+            Double(GameAudioEngine.stereoPan(for: 0, profile: nil)),
+            pan(0), accuracy: 0.0001
+        )
     }
 
     /// The centre line, and only the centre line, is centred.

@@ -26,6 +26,7 @@ struct HowToPlayView: View {
 
                     section("Before You Start", rows: [
                         "Grab headphones and hold your device in portrait. Everything in this game happens in stereo, so headphones are not optional.",
+                        "If you use AirPods, open Control Center while playing, triple-tap or long-press the volume slider, and turn Spatial Stereo to Off.",
                         "VoiceOver users: turn Direct Touch on for Audio Showdown in the rotor before you start a match. The table is a Direct Touch area, so your drags reach the paddle instead of being read as gestures.",
                         "Your goal is at the bottom of the table. The computer’s goal is at the top. You play the bottom half, the computer plays the top."
                     ])

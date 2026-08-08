@@ -5,6 +5,8 @@ struct SettingsView: View {
     let audioEngine: GameAudioEngine
     @Environment(\.dismiss) private var dismiss
     @State private var previewHaptics = GameHapticsEngine()
+    /// Temporary: reports the live audio route so the AirPods narrowing can be
+    /// diagnosed on device. Remove once that is resolved.
 
     // MARK: - Puck volume preview debounce
     //
@@ -232,6 +234,8 @@ struct SettingsView: View {
                             selection: $settings.themeIndex,
                             theme: theme
                         )
+
+                        AudioDiagnosticsView(theme: theme, audioEngine: audioEngine)
 
                         AboutAudioShowdownView(theme: theme)
                     }
